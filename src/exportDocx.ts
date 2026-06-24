@@ -181,17 +181,17 @@ function createDiaryChildren(diary: CaseDiary): any[] {
         borderlessRow("CR. NO. & SEC. OF LAW :", diary.crNoAndSecOfLaw),
         borderlessRow("DATE, TIME & PLACE OF OCCURRENCE", diary.dateTimeAndPlaceOfOccurrence),
         borderlessRow("DATE OF CD", diary.dateOfCd),
-        borderlessRow("I. DATE OF REPORT / TIME", diary.dateOfReportTime),
-        borderlessRow("II. COMPLAINANT", diary.complainant),
+        borderlessRow("I.DATE OF REPORT / TIME", diary.dateOfReportTime),
+        borderlessRow("II.COMPLAINANT", diary.complainant),
       ],
     }),
 
     new Paragraph({ spacing: { before: 180, after: 60 } }),
 
-    // III. ACCUSED (Simple Heading)
+    // III.ACCUSED (Simple Heading)
     new Paragraph({
       spacing: { before: 120, after: 120 },
-      children: [new TextRun({ text: "III. ACCUSED", bold: true, size: 20, font: "Arial" })],
+      children: [new TextRun({ text: "III.ACCUSED", bold: true, size: 20, font: "Arial" })],
     }),
 
     // Accused Table (The ONLY visual grid table in the entire layout)
@@ -203,10 +203,26 @@ function createDiaryChildren(diary: CaseDiary): any[] {
 
     new Paragraph({ spacing: { before: 180, after: 60 } }),
 
-    // IV. PROPERTY LOST DETAILS
-    new Paragraph({
-      children: [new TextRun({ text: "IV. PROPERTY LOST DETAILS", bold: true, size: 20, font: "Arial" })],
-      spacing: { before: 120, after: 60 },
+    // IV.PROPERTY LOST DETAILS
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
+      rows: [
+        new TableRow({
+          children: [
+            new TableCell({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              borders: { top: noneBorder, bottom: thinBorder, left: noneBorder, right: noneBorder },
+              children: [
+                new Paragraph({
+                  children: [boldText("IV.PROPERTY LOST DETAILS")],
+                  spacing: { before: 120, after: 60 },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
     }),
     new Paragraph({
       children: [new TextRun({ text: diary.propertyLostDetails || "NIL", size: 20, font: "Arial" })],
@@ -214,10 +230,26 @@ function createDiaryChildren(diary: CaseDiary): any[] {
       indent: { left: 360 },
     }),
 
-    // V. RECOVERED PROPERTY DETAILS
-    new Paragraph({
-      children: [new TextRun({ text: "V. RECOVERED PROPERTY DETAILS", bold: true, size: 20, font: "Arial" })],
-      spacing: { before: 120, after: 60 },
+    // V.RECOVERED PROPERTY DETAILS
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
+      rows: [
+        new TableRow({
+          children: [
+            new TableCell({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              borders: { top: noneBorder, bottom: thinBorder, left: noneBorder, right: noneBorder },
+              children: [
+                new Paragraph({
+                  children: [boldText("V.RECOVERED PROPERTY DETAILS")],
+                  spacing: { before: 120, after: 60 },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
     }),
     new Paragraph({
       children: [new TextRun({ text: diary.recoveredPropertyDetails || "NIL", size: 20, font: "Arial" })],
@@ -233,8 +265,8 @@ function createDiaryChildren(diary: CaseDiary): any[] {
       columnWidths: [3800, 5200],
       borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
       rows: [
-        borderlessRow("VI. DATE OF PREVIOUS CASE DIARY", diary.dateOfPreviousCaseDiary),
-        borderlessRow("VII. STAGE OF THE CASE", diary.stageOfTheCase),
+        borderlessRow("VI.DATE OF PREVIOUS CASE DIARY", diary.dateOfPreviousCaseDiary),
+        borderlessRow("VII.STAGE OF THE CASE", diary.stageOfTheCase),
       ],
     }),
 
@@ -286,8 +318,8 @@ function createDiaryChildren(diary: CaseDiary): any[] {
         borderlessRow("WHETHER APP / PP PRESENT ?", diary.whetherAppPpPresent),
         borderlessRow("WHETHER DEFENCE COUNSEL PRESENT ?", diary.whetherDefenceCounselPresent),
         borderlessRow("NO. OF PWs CITED", diary.noOfPwsCited),
-        borderlessRow("NO. OF PWs EXAMINED SO FAR", diary.noOfPwsExaminedSoFar),
-        borderlessRow("NO. OF PWs EXAMINED TODAY", diary.noOfPwsExaminedToday),
+        borderlessRow("NO.OF PWs EXAMINED SO FAR", diary.noOfPwsExaminedSoFar),
+        borderlessRow("NO.OF PWs EXAMINED TODAY", diary.noOfPwsExaminedToday),
         borderlessRow("TOTAL NO. OF ACCUSED CHARGED", diary.totalNoOfAccusedCharged),
         borderlessRow("NO. OF ACCUSED PRESENT", diary.noOfAccusedPresent),
         borderlessRow("NO. OF ACCUSED ABSENT", diary.noOfAccusedAbsent),
