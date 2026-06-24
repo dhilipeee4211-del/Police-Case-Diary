@@ -1,12 +1,11 @@
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDocs, 
-  deleteDoc, 
-  query, 
-  where, 
-  orderBy 
+import {
+  collection,
+  doc,
+  setDoc,
+  getDocs,
+  deleteDoc,
+  query,
+  where,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { SavedDatabase, CaseDiary } from "./types";
@@ -25,20 +24,26 @@ export async function saveSavedDatabase(
   userId: string,
   existingDbId?: string
 ): Promise<SavedDatabase> {
+  // BUG FIX 3: Preserve original createdAt on updates — only set Date.now() for new records.
+  // Previously every save (including edits) used Date.now(), corrupting the creation time
+  // and always pushing the item to the top of the list.
+  const existingRecord = existingDbId
+    ? getLocalDatabases().find((item) => item.id === existingDbId)
+    : undefined;
+
   const newDb: SavedDatabase = {
     id: existingDbId || `db-${Date.now()}`,
     userId,
     name,
-    createdAt: Date.now(),
-    diaries
+    createdAt: existingRecord?.createdAt ?? Date.now(), // preserve original timestamp
+    diaries,
   };
 
   // 1. Always save to Local Storage first for reliable immediate feedback
   try {
     let localDbs = getLocalDatabases();
-    // Remove any existing copy with the same ID to prevent duplicates and bloat
-    localDbs = localDbs.filter(item => item.id !== newDb.id);
-    localDbs.unshift(newDb); // Add to the top of the list
+    localDbs = localDbs.filter((item) => item.id !== newDb.id);
+    localDbs.unshift(newDb);
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(localDbs));
   } catch (err) {
     console.error("Local storage save error:", err);
@@ -60,59 +65,79 @@ export async function saveSavedDatabase(
 
 // Get all databases for the current user
 export async function getSavedDatabases(userId: string): Promise<SavedDatabase[]> {
-  const localDbs = getLocalDatabases().filter(item => item.userId === userId || isGuest(userId));
+  // BUG FIX 2: Filter local databases strictly by userId.
+  // Previously `|| isGuest(userId)` caused ALL guest entries to be shown to
+  // any guest session, leaking data across sessions.
+  const localDbs = getLocalDatabases().filter((item) => item.userId === userId);
 
   if (isGuest(userId)) {
     return localDbs;
   }
 
-  // Try to load from Firestore
+  // Try to load from Firestore for authenticated (Google) users
   try {
-    const q = query(
-      collection(db, "databases"),
-      where("userId", "==", userId)
-    );
+    const q = query(collection(db, "databases"), where("userId", "==", userId));
     const querySnapshot = await getDocs(q);
+
     const firestoreDbs: SavedDatabase[] = [];
-    querySnapshot.forEach((doc) => {
-      firestoreDbs.push(doc.data() as SavedDatabase);
+    querySnapshot.forEach((docSnap) => {
+      firestoreDbs.push(docSnap.data() as SavedDatabase);
     });
 
-    // Sort firestore items descending by date
     firestoreDbs.sort((a, b) => b.createdAt - a.createdAt);
 
-    if (firestoreDbs.length > 0) {
-      // Merge unique items between local storage and firestore to ensure no data loss
-      const mergedDbsMap = new Map<string, SavedDatabase>();
-      
-      // Load Firestore items first (higher priority)
-      firestoreDbs.forEach(item => mergedDbsMap.set(item.id, item));
-      
-      // Supplement with any local-only items for this user
-      localDbs.forEach(item => {
-        if (!mergedDbsMap.has(item.id)) {
-          mergedDbsMap.set(item.id, item);
-        }
-      });
+    // BUG FIX 1: Always merge — even when Firestore returns 0 items.
+    // Previously `if (firestoreDbs.length > 0)` meant a brand-new Google account
+    // (empty Firestore) would skip the merge entirely and never see local data.
+    // Now we always build the merged map so local-only entries are always included.
+    const mergedDbsMap = new Map<string, SavedDatabase>();
 
-      const merged = Array.from(mergedDbsMap.values()).sort((a, b) => b.createdAt - a.createdAt);
-      
-      // Sync merged back to local storage
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(merged));
-      return merged;
+    // Firestore wins on conflict (higher priority / source of truth)
+    firestoreDbs.forEach((item) => mergedDbsMap.set(item.id, item));
+
+    // Supplement with any local-only items for this user (e.g. saved while offline)
+    localDbs.forEach((item) => {
+      if (!mergedDbsMap.has(item.id)) {
+        mergedDbsMap.set(item.id, item);
+      }
+    });
+
+    const merged = Array.from(mergedDbsMap.values()).sort(
+      (a, b) => b.createdAt - a.createdAt
+    );
+
+    // Sync merged list back to local storage
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(merged));
+
+    // BUG FIX 4: Push any local-only entries up to Firestore so they survive
+    // on other devices / after clearing local storage.
+    const firestoreIds = new Set(firestoreDbs.map((item) => item.id));
+    const localOnlyEntries = localDbs.filter((item) => !firestoreIds.has(item.id));
+
+    if (localOnlyEntries.length > 0) {
+      console.log(`Uploading ${localOnlyEntries.length} local-only entries to Firestore...`);
+      await Promise.all(
+        localOnlyEntries.map((item) =>
+          setDoc(doc(collection(db, "databases"), item.id), {
+            ...item,
+            userId, // ensure userId is always the current authenticated user
+          })
+        )
+      );
     }
+
+    return merged;
   } catch (err) {
     console.warn("Failed to fetch from Firestore, utilizing Local Storage:", err);
+    return localDbs;
   }
-
-  return localDbs;
 }
 
 // Delete a database session
 export async function deleteSavedDatabase(id: string, userId: string): Promise<void> {
   // 1. Delete from Local Storage
   try {
-    const localDbs = getLocalDatabases().filter(item => item.id !== id);
+    const localDbs = getLocalDatabases().filter((item) => item.id !== id);
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(localDbs));
   } catch (err) {
     console.error("Local storage deletion error:", err);
@@ -130,24 +155,24 @@ export async function deleteSavedDatabase(id: string, userId: string): Promise<v
   }
 }
 
-// Local storage direct getter with automatic de-duplication to prevent bloating and sluggish load times
+// Local storage getter with automatic de-duplication
 function getLocalDatabases(): SavedDatabase[] {
   try {
     const data = localStorage.getItem(LOCAL_STORAGE_KEY);
     const list: SavedDatabase[] = data ? JSON.parse(data) : [];
-    
+
     if (Array.isArray(list)) {
       const uniqueList: SavedDatabase[] = [];
       const seenIds = new Set<string>();
-      
-      for (const db of list) {
-        if (db && db.id && !seenIds.has(db.id)) {
-          seenIds.add(db.id);
-          uniqueList.push(db);
+
+      for (const item of list) {
+        if (item && item.id && !seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          uniqueList.push(item);
         }
       }
-      
-      // If we cleaned up duplicates, write it back to keep storage pristine
+
+      // Write back if we cleaned up duplicates
       if (uniqueList.length !== list.length) {
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(uniqueList));
       }
