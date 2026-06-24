@@ -35,9 +35,9 @@ function createDiaryChildren(diary: CaseDiary): any[] {
   const boldText = (text: string, size = 10) => new TextRun({ text, bold: true, size: size * 2, font: "Arial" });
   const normalText = (text: string, size = 10) => new TextRun({ text: text || "NIL", size: size * 2, font: "Arial" });
 
-  // Borderless Table row builder with "round up" / boxed border for CR. NO. field
+  // Borderless Table row builder
   const borderlessRow = (label: string, value: string, space = 60) => {
-    const isCrNo = label.toUpperCase().includes("CR. NO.") || label.toUpperCase().includes("CR.NO.");
+    const isCrNo = label.toUpperCase().includes("CR. NO.");
     return new TableRow({
       children: [
         new TableCell({
@@ -58,7 +58,7 @@ function createDiaryChildren(diary: CaseDiary): any[] {
                   ? new TextRun({ text: `  ${value}  `, bold: true, size: 22, font: "Arial", color: "111827" })
                   : normalText(value)
               ], 
-              spacing: { before: isCrNo ? 80 : space, after: isCrNo ? 80 : space } 
+              spacing: { before: isCrNo ? 100 : space, after: isCrNo ? 100 : space } 
             })
           ],
         }),

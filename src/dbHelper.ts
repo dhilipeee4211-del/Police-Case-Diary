@@ -35,7 +35,9 @@ export async function saveSavedDatabase(
 
   // 1. Always save to Local Storage first for reliable immediate feedback
   try {
-    const localDbs = getLocalDatabases();
+    let localDbs = getLocalDatabases();
+    // Remove any existing copy with the same ID to prevent duplicates and bloat
+    localDbs = localDbs.filter(item => item.id !== newDb.id);
     localDbs.unshift(newDb); // Add to the top of the list
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(localDbs));
   } catch (err) {
@@ -128,11 +130,30 @@ export async function deleteSavedDatabase(id: string, userId: string): Promise<v
   }
 }
 
-// Local storage direct getter
+// Local storage direct getter with automatic de-duplication to prevent bloating and sluggish load times
 function getLocalDatabases(): SavedDatabase[] {
   try {
     const data = localStorage.getItem(LOCAL_STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
+    const list: SavedDatabase[] = data ? JSON.parse(data) : [];
+    
+    if (Array.isArray(list)) {
+      const uniqueList: SavedDatabase[] = [];
+      const seenIds = new Set<string>();
+      
+      for (const db of list) {
+        if (db && db.id && !seenIds.has(db.id)) {
+          seenIds.add(db.id);
+          uniqueList.push(db);
+        }
+      }
+      
+      // If we cleaned up duplicates, write it back to keep storage pristine
+      if (uniqueList.length !== list.length) {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(uniqueList));
+      }
+      return uniqueList;
+    }
+    return [];
   } catch (err) {
     console.error("Error reading from local storage:", err);
     return [];

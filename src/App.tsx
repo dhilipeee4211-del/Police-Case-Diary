@@ -92,7 +92,7 @@ export default function App() {
     }
   }, []);
 
-  const toggleRemarksVoiceTyping = () => {
+  const toggleRemarksVoiceTyping = async () => {
     if (!voiceTypingSupported) {
       alert("Voice typing is not supported in this browser. Please try using Google Chrome or Safari.");
       return;
@@ -109,6 +109,9 @@ export default function App() {
     }
 
     try {
+      // Explicitly request microphone access first to trigger permissions dialog in browser/iframe
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = false;
@@ -150,7 +153,8 @@ export default function App() {
       recognitionRef.current = recognition;
       recognition.start();
     } catch (err) {
-      console.error("Failed to start speech recognition:", err);
+      console.error("Failed to start speech recognition or get microphone permission:", err);
+      alert("Microphone access is required for Voice Typing. Please allow microphone permissions or open this application in a new tab.");
       setIsListeningRemarks(false);
     }
   };
@@ -165,9 +169,26 @@ export default function App() {
         setNeedsAuth(false);
       },
       () => {
-        setUser(null);
-        setToken(null);
-        setNeedsAuth(true);
+        const guestActive = localStorage.getItem("guest_session_active");
+        if (guestActive === "true") {
+          let guestId = localStorage.getItem("guest_user_id");
+          if (!guestId) {
+            guestId = 'guest-' + Date.now();
+            localStorage.setItem("guest_user_id", guestId);
+          }
+          setUser({
+            uid: guestId,
+            displayName: 'Guest Officer',
+            email: 'guest@station.local',
+            photoURL: null,
+          } as any);
+          setToken('guest-token');
+          setNeedsAuth(false);
+        } else {
+          setUser(null);
+          setToken(null);
+          setNeedsAuth(true);
+        }
       }
     );
     return () => unsubscribe();
@@ -179,6 +200,7 @@ export default function App() {
       guestId = 'guest-' + Date.now();
       localStorage.setItem("guest_user_id", guestId);
     }
+    localStorage.setItem("guest_session_active", "true");
     setUser({
       uid: guestId,
       displayName: 'Guest Officer',
@@ -217,6 +239,7 @@ export default function App() {
   const handleLogout = async () => {
     if (window.confirm('Are you sure you want to sign out? Your session history will be cleared.')) {
       try {
+        localStorage.removeItem("guest_session_active");
         await logout();
         setUser(null);
         setToken(null);
@@ -268,12 +291,53 @@ export default function App() {
 
     setSaveDbStatus({ type: 'loading', message: 'Saving to your secure database library...' });
     try {
-      const saved = await saveSavedDatabase(name, diaries, user.uid);
-      setSavedDatabases((prev) => [saved, ...prev]);
-      setSaveDbStatus({ type: 'success', message: `Successfully saved as "${name}"!` });
+      // Find if there is an existing database under the same Crime Number and Police Station head
+      const existingDb = savedDatabases.find((db) => {
+        if (db.name.trim().toLowerCase() === name.toLowerCase()) return true;
+        return db.diaries.some((d) => 
+          diaries.some((newD) => {
+            const dCrime = (d.crNoAndSecOfLaw || '').split(',')[0].trim().toLowerCase();
+            const newCrime = (newD.crNoAndSecOfLaw || '').split(',')[0].trim().toLowerCase();
+            const dStation = (d.policeStation || '').trim().toLowerCase();
+            const newStation = (newD.policeStation || '').trim().toLowerCase();
+            return dCrime && newCrime && dCrime === newCrime && dStation === newStation;
+          })
+        );
+      });
+
+      let saved;
+      if (existingDb) {
+        // Merge diaries: replace matching ones (same Cr No & Date), append others
+        const mergedDiaries = [...existingDb.diaries];
+        diaries.forEach((newD) => {
+          const idx = mergedDiaries.findIndex((d) => 
+            d.id === newD.id || 
+            ((d.crNoAndSecOfLaw || '').trim().toLowerCase() === (newD.crNoAndSecOfLaw || '').trim().toLowerCase() &&
+             (d.dateOfCd || '').trim().toLowerCase() === (newD.dateOfCd || '').trim().toLowerCase())
+          );
+          if (idx >= 0) {
+            mergedDiaries[idx] = newD; // Update/Overwrite
+          } else {
+            mergedDiaries.push(newD);  // Append
+          }
+        });
+        
+        saved = await saveSavedDatabase(existingDb.name, mergedDiaries, user.uid, existingDb.id);
+        setSavedDatabases((prev) => prev.map(db => db.id === existingDb.id ? saved : db));
+        setSaveDbStatus({ type: 'success', message: `Updated matching Case Head: "${existingDb.name}"` });
+        setSelectedSavedDbId(existingDb.id);
+        setLoadedDbId(existingDb.id);
+        setLoadedDbName(existingDb.name);
+      } else {
+        saved = await saveSavedDatabase(name, diaries, user.uid);
+        setSavedDatabases((prev) => [saved, ...prev]);
+        setSaveDbStatus({ type: 'success', message: `Successfully saved as "${name}"!` });
+        setSelectedSavedDbId(saved.id);
+        setLoadedDbId(saved.id);
+        setLoadedDbName(saved.name);
+      }
       setShowSaveDbPrompt(false);
       setSidebarTab('history');
-      setSelectedSavedDbId(saved.id);
       setTimeout(() => {
         setSaveDbStatus({ type: null, message: null });
       }, 3500);
@@ -380,6 +444,20 @@ export default function App() {
     setLoadedDbId(dbItem.id);
     setLoadedDbName(dbItem.name);
     setSidebarTab('workspace');
+  };
+
+  const handleDeleteWorkspaceDiary = (diaryId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (window.confirm("Are you sure you want to delete this case record from your active workspace?")) {
+      const updated = diaries.filter(d => d.id !== diaryId);
+      setDiaries(updated);
+      if (selectedDiaryId === diaryId) {
+        setSelectedDiaryId(updated[0]?.id || null);
+      }
+    }
   };
 
   const handleDownloadAllDocx = async (diariesList: CaseDiary[], fileNamePrefix: string) => {
@@ -549,12 +627,12 @@ export default function App() {
           attendedBy: diary.attendedBy || '',
         }));
 
-        // Remove duplicate entries with the exact same crime number and police station
+        // Remove duplicate entries with the exact same crime number, police station, and date of CD
         const seenDiariesKeys = new Set<string>();
         const formattedDiaries: CaseDiary[] = [];
 
         rawDiaries.forEach((diary) => {
-          const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}`;
+          const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
           if (!seenDiariesKeys.has(key)) {
             seenDiariesKeys.add(key);
             formattedDiaries.push(diary);
@@ -695,15 +773,15 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#fafbfc] flex flex-col antialiased">
       {/* Header Bar */}
-      <header className="border-b border-gray-200 bg-white sticky top-0 z-50 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-              <Sparkles className="w-6 h-6" />
+      <header className="border-b border-gray-200 bg-white sticky top-0 z-50 px-4 sm:px-6 py-3 sm:py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <div className="p-1.5 sm:p-2 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
+              <Sparkles className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <h1 className="font-display font-semibold text-lg text-gray-950 tracking-tight">AI Case Diary Reconstruction Workspace</h1>
-              <p className="text-xs text-gray-500 font-medium">Reconstruct, Form and Format Scanned Case Diaries with Pixel Precision</p>
+            <div className="min-w-0">
+              <h1 className="font-display font-semibold text-sm sm:text-base md:text-lg text-gray-950 tracking-tight truncate">AI Case Diary Reconstruction Workspace</h1>
+              <p className="text-[10px] sm:text-xs text-gray-400 sm:text-gray-500 font-medium truncate">Reconstruct, Form and Format Scanned Case Diaries with Pixel Precision</p>
             </div>
           </div>
 
@@ -1074,18 +1152,29 @@ export default function App() {
                                           {diary.crNoAndSecOfLaw || 'Case Diary Entry'}
                                         </p>
                                         
-                                        {/* Small circle checkbox indicator for Saved status */}
-                                        <button
-                                          onClick={(e) => handleToggleSavedDraft(diary.id, e)}
-                                          className={`p-1 rounded-full border transition-all ${
-                                            diary.isSavedDraft
-                                              ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-200'
-                                              : 'bg-white border-gray-200 text-gray-300 hover:border-indigo-300 hover:text-indigo-600'
-                                          }`}
-                                          title={diary.isSavedDraft ? "Saved Draft (Click to toggle)" : "Unsaved Draft (Click to save)"}
-                                        >
-                                          <Check className="w-3 h-3" />
-                                        </button>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          {/* Delete record from workspace */}
+                                          <button
+                                            onClick={(e) => handleDeleteWorkspaceDiary(diary.id, e)}
+                                            className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                            title="Delete record from active workspace"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+
+                                          {/* Small circle checkbox indicator for Saved status */}
+                                          <button
+                                            onClick={(e) => handleToggleSavedDraft(diary.id, e)}
+                                            className={`p-1 rounded-full border transition-all ${
+                                              diary.isSavedDraft
+                                                ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-200'
+                                                : 'bg-white border-gray-200 text-gray-300 hover:border-indigo-300 hover:text-indigo-600'
+                                            }`}
+                                            title={diary.isSavedDraft ? "Saved Draft (Click to toggle)" : "Unsaved Draft (Click to save)"}
+                                          >
+                                            <Check className="w-3 h-3" />
+                                          </button>
+                                        </div>
                                       </div>
                                       
                                       <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-gray-400">
@@ -1371,7 +1460,7 @@ export default function App() {
                         <p className="text-xs text-gray-400 font-medium">Reconstructed Case Diary • Station: {activeDiary.policeStation}</p>
                       </div>
 
-                      <div className="flex items-center gap-2.5 shrink-0 self-stretch sm:self-auto justify-end">
+                      <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-stretch sm:self-auto justify-end">
                         <button
                           id="save-draft-btn"
                           onClick={saveWorkspaceChanges}
