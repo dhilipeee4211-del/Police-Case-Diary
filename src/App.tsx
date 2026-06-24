@@ -30,7 +30,10 @@ import {
   Database,
   History,
   Eye,
-  ChevronDown
+  ChevronDown,
+  Mic,
+  MicOff,
+  Edit3
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initAuth, googleSignIn, logout } from './firebase';
@@ -72,8 +75,85 @@ export default function App() {
   const [showSaveDbPrompt, setShowSaveDbPrompt] = useState<boolean>(false);
   const [saveDbStatus, setSaveDbStatus] = useState<{ type: 'success' | 'error' | 'loading' | null; message: string | null }>({ type: null, message: null });
   const [sidebarTab, setSidebarTab] = useState<'workspace' | 'history'>('workspace');
+  const [loadedDbId, setLoadedDbId] = useState<string | null>(null);
+  const [loadedDbName, setLoadedDbName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Tamil Voice Typing States
+  const [isListeningRemarks, setIsListeningRemarks] = useState<boolean>(false);
+  const [voiceTypingSupported, setVoiceTypingSupported] = useState<boolean>(true);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceTypingSupported(false);
+    }
+  }, []);
+
+  const toggleRemarksVoiceTyping = () => {
+    if (!voiceTypingSupported) {
+      alert("Voice typing is not supported in this browser. Please try using Google Chrome or Safari.");
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (isListeningRemarks) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListeningRemarks(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'ta-IN'; // Tamil (India)
+
+      recognition.onstart = () => {
+        setIsListeningRemarks(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        const resultIndex = event.resultIndex;
+        const transcript = event.results[resultIndex][0].transcript;
+
+        setDiaries((prev) =>
+          prev.map((d) => {
+            if (d.id === selectedDiaryId) {
+              const currentRemarks = d.remarks || '';
+              const separator = currentRemarks ? ' ' : '';
+              return { ...d, remarks: currentRemarks + separator + transcript };
+            }
+            return d;
+          })
+        );
+        setIsSaved(false);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error:", event.error);
+        if (event.error === 'not-allowed') {
+          alert("Microphone permission denied. Please allow microphone access in your browser settings to use voice typing.");
+        }
+        setIsListeningRemarks(false);
+      };
+
+      recognition.onend = () => {
+        setIsListeningRemarks(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.error("Failed to start speech recognition:", err);
+      setIsListeningRemarks(false);
+    }
+  };
 
 
   // Initialize Auth state on load
@@ -94,8 +174,13 @@ export default function App() {
   }, []);
 
   const handleGuestAccess = () => {
+    let guestId = localStorage.getItem("guest_user_id");
+    if (!guestId) {
+      guestId = 'guest-' + Date.now();
+      localStorage.setItem("guest_user_id", guestId);
+    }
     setUser({
-      uid: 'guest-' + Date.now(),
+      uid: guestId,
       displayName: 'Guest Officer',
       email: 'guest@station.local',
       photoURL: null,
@@ -202,9 +287,28 @@ export default function App() {
     if (dbItem.diaries && dbItem.diaries.length > 0) {
       setDiaries(dbItem.diaries);
       setSelectedDiaryId(dbItem.diaries[0].id);
+      setLoadedDbId(dbItem.id);
+      setLoadedDbName(dbItem.name);
       setSidebarTab('workspace');
     } else {
       alert("This saved database contains no diary entries.");
+    }
+  };
+
+  const handleUpdateDatabase = async () => {
+    if (!user || !loadedDbId) return;
+    setSaveDbStatus({ type: 'loading', message: 'Updating your database library...' });
+    try {
+      const saved = await saveSavedDatabase(loadedDbName || "Database", diaries, user.uid, loadedDbId);
+      setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
+      setSaveDbStatus({ type: 'success', message: 'Database updated successfully!' });
+      setIsSaved(true);
+      setTimeout(() => {
+        setSaveDbStatus({ type: null, message: null });
+      }, 3000);
+    } catch (err: any) {
+      console.error('Update database error:', err);
+      setSaveDbStatus({ type: 'error', message: err.message || 'Failed to update database.' });
     }
   };
 
@@ -217,11 +321,65 @@ export default function App() {
         if (selectedSavedDbId === id) {
           setSelectedSavedDbId(null);
         }
+        if (loadedDbId === id) {
+          setLoadedDbId(null);
+          setLoadedDbName(null);
+        }
       } catch (err) {
         console.error("Delete database error:", err);
         alert("Failed to delete the database.");
       }
     }
+  };
+
+  const handleDeleteDiaryFromDatabase = async (dbId: string, diaryId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!user) return;
+    if (window.confirm("Are you sure you want to delete this specific case record from this saved database?")) {
+      try {
+        const targetDb = savedDatabases.find(db => db.id === dbId);
+        if (!targetDb) return;
+        
+        const updatedDiaries = targetDb.diaries.filter(d => d.id !== diaryId);
+        
+        if (updatedDiaries.length === 0) {
+          await deleteSavedDatabase(dbId, user.uid);
+          setSavedDatabases(prev => prev.filter(db => db.id !== dbId));
+          if (loadedDbId === dbId) {
+            setLoadedDbId(null);
+            setLoadedDbName(null);
+            setDiaries([]);
+            setSelectedDiaryId(null);
+          }
+          alert("The database became empty and has been deleted completely.");
+        } else {
+          const updatedDb = await saveSavedDatabase(targetDb.name, updatedDiaries, user.uid, dbId);
+          setSavedDatabases(prev => prev.map(db => db.id === dbId ? updatedDb : db));
+          if (loadedDbId === dbId) {
+            setDiaries(updatedDiaries);
+            setSelectedDiaryId(updatedDiaries[0]?.id || null);
+          }
+        }
+      } catch (err) {
+        console.error("Error deleting individual diary from DB:", err);
+        alert("Failed to delete this case record.");
+      }
+    }
+  };
+
+  const handleEditDiaryFromDatabase = (dbItem: SavedDatabase, diaryId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setDiaries(dbItem.diaries);
+    setSelectedDiaryId(diaryId);
+    setLoadedDbId(dbItem.id);
+    setLoadedDbName(dbItem.name);
+    setSidebarTab('workspace');
   };
 
   const handleDownloadAllDocx = async (diariesList: CaseDiary[], fileNamePrefix: string) => {
@@ -358,7 +516,7 @@ export default function App() {
         setExtractionStep('Reconstruction completed successfully!');
 
         // Map extracted indices to unique string IDs
-        const formattedDiaries: CaseDiary[] = result.data.map((diary: any, idx: number) => ({
+        const rawDiaries: CaseDiary[] = result.data.map((diary: any, idx: number) => ({
           ...diary,
           id: `${Date.now()}-${idx}`,
           policeStation: diary.policeStation || 'VIKKIRAMANGALAM',
@@ -390,6 +548,18 @@ export default function App() {
           nextHearingDate: diary.nextHearingDate || '',
           attendedBy: diary.attendedBy || '',
         }));
+
+        // Remove duplicate entries with the exact same crime number and police station
+        const seenDiariesKeys = new Set<string>();
+        const formattedDiaries: CaseDiary[] = [];
+
+        rawDiaries.forEach((diary) => {
+          const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}`;
+          if (!seenDiariesKeys.has(key)) {
+            seenDiariesKeys.add(key);
+            formattedDiaries.push(diary);
+          }
+        });
 
         // Delay slightly for visual satisfaction of reaching 100%
         setTimeout(() => {
@@ -1057,7 +1227,27 @@ export default function App() {
                                             <p className="text-[10px] font-bold text-gray-800 truncate">{diary.crNoAndSecOfLaw || 'Case Record'}</p>
                                             <p className="text-[8px] text-gray-400 truncate">{diary.policeStation}</p>
                                           </div>
-                                          <span className="text-[8px] font-bold text-indigo-600 shrink-0 bg-indigo-50/50 px-1.5 py-0.5 rounded-md">{diary.dateOfCd}</span>
+                                          <div className="flex items-center gap-1.5 shrink-0">
+                                            <span className="text-[8px] font-bold text-indigo-600 bg-indigo-50/50 px-1.5 py-0.5 rounded-md">{diary.dateOfCd}</span>
+                                            
+                                            {/* Edit individual record button */}
+                                            <button
+                                              onClick={(e) => handleEditDiaryFromDatabase(dbItem, diary.id, e)}
+                                              className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                                              title="Edit individual case record in workspace"
+                                            >
+                                              <Edit3 className="w-3 h-3" />
+                                            </button>
+
+                                            {/* Delete individual record button */}
+                                            <button
+                                              onClick={(e) => handleDeleteDiaryFromDatabase(dbItem.id, diary.id, e)}
+                                              className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                              title="Delete individual case record from database"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                            </button>
+                                          </div>
                                         </div>
                                       ))}
                                     </div>
@@ -1150,6 +1340,26 @@ export default function App() {
                 {activeDiary ? (
                   <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm flex flex-col h-full min-h-[600px]">
                     
+                    {/* Database active session indicator banner */}
+                    {loadedDbId && (
+                      <div className="mb-4 bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in">
+                        <div className="flex items-center gap-2">
+                          <Database className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <div>
+                            <p className="text-xs font-bold text-indigo-950">Active Database Session: <span className="underline">{loadedDbName}</span></p>
+                            <p className="text-[10px] text-indigo-700/80 font-medium">Any changes you make here can be synced directly back to your database library.</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleUpdateDatabase}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all shrink-0"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          Sync Updates to DB
+                        </button>
+                      </div>
+                    )}
+                    
                     {/* Workspace Header Actions */}
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b border-gray-100">
                       <div>
@@ -1230,7 +1440,24 @@ export default function App() {
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">CR. No. & Sec of Law</label>
+                            <div className="flex items-center justify-between">
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase">CR. No. & Sec of Law</label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleFieldChange('stageOfTheCase', 'CASE DISPOSED');
+                                  handleFieldChange('nextHearingDate', '');
+                                }}
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
+                                  activeDiary.stageOfTheCase === 'CASE DISPOSED'
+                                    ? 'bg-red-500 text-white border-red-600 shadow-xs'
+                                    : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                                }`}
+                                title="Click to dispose of this case immediately"
+                              >
+                                {activeDiary.stageOfTheCase === 'CASE DISPOSED' ? '✓ Case Disposed' : 'Case Disposed'}
+                              </button>
+                            </div>
                             <input
                               type="text"
                               value={activeDiary.crNoAndSecOfLaw}
@@ -1520,9 +1747,33 @@ export default function App() {
 
                       {/* Section 7: Case Remarks Multi-line (With support for Tamil text preservation) */}
                       <div className="p-4 border border-indigo-200 bg-indigo-50/10 rounded-xl space-y-2">
-                        <label className="block text-[10px] font-bold text-indigo-700 uppercase tracking-wider">
-                          REMARKS & TAMIL TRANSCRIPTION
-                        </label>
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                          <label className="block text-[10px] font-bold text-indigo-700 uppercase tracking-wider">
+                            REMARKS & TAMIL TRANSCRIPTION
+                          </label>
+                          <button
+                            type="button"
+                            onClick={toggleRemarksVoiceTyping}
+                            className={`flex items-center justify-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer border ${
+                              isListeningRemarks 
+                                ? 'bg-red-500 hover:bg-red-600 text-white border-red-600 animate-pulse'
+                                : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 shadow-xs'
+                            }`}
+                            title="Tamil Voice Typing (Speak in Tamil)"
+                          >
+                            {isListeningRemarks ? (
+                              <>
+                                <MicOff className="w-3.5 h-3.5" />
+                                Stop Listening
+                              </>
+                            ) : (
+                              <>
+                                <Mic className="w-3.5 h-3.5 text-indigo-500" />
+                                Tamil Voice Typing (பேசவும்)
+                              </>
+                            )}
+                          </button>
+                        </div>
                         <p className="text-[10px] text-gray-400 font-medium">
                           Preserve typewriter records, signatures, and fine payments clearly. Supports complete line breaks.
                         </p>

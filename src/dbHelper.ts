@@ -22,10 +22,11 @@ function isGuest(userId: string): boolean {
 export async function saveSavedDatabase(
   name: string,
   diaries: CaseDiary[],
-  userId: string
+  userId: string,
+  existingDbId?: string
 ): Promise<SavedDatabase> {
   const newDb: SavedDatabase = {
-    id: `db-${Date.now()}`,
+    id: existingDbId || `db-${Date.now()}`,
     userId,
     name,
     createdAt: Date.now(),

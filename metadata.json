@@ -1,6 +1,6 @@
 {
   "name": "PDF to Word Document Converter",
   "description": "Convert PDF files into Microsoft Word documents with exact formatting preservation using Google Docs and Google Drive.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

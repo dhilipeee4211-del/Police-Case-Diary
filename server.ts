@@ -87,7 +87,7 @@ Extract the details of EVERY case diary entry found into a structured JSON array
     "totalNoOfAccusedCharged": "Total accused charged",
     "noOfAccusedPresent": "Number of accused present",
     "noOfAccusedAbsent": "Number of accused absent",
-    "remarks": "Transcribe the REMARKS section exactly. If the remarks are written in Tamil typewriter script or handwriting, please provide a high-quality literal transcription/summary in both Tamil and English translation so it is highly readable.",
+    "remarks": "Transcribe the REMARKS section exactly as written in the original document (typically in Tamil). Do not force or auto-translate it; keep it exactly as in the PDF.",
     "postedFor": "POSTED FOR (e.g. ACCUSED APPEARANCE, CROSS EXAMINATION)",
     "nextHearingDate": "NEXT HEARING DATE",
     "attendedBy": "ATTENDED BY (e.g. RAJU R(HC))"
@@ -97,7 +97,7 @@ Extract the details of EVERY case diary entry found into a structured JSON array
 Ensure that you:
 1. Parse every page thoroughly. Do not skip any case diaries.
 2. Group the remarks and page remarks accurately with their corresponding case diary entry (by matching dates, page headers, or CR Nos).
-3. Translate any Tamil-specific sections in the remarks field cleanly so the user has an accurate English record alongside the original.
+3. Do not force English translations on the Tamil remarks; keep the original Tamil text exactly as written.
 4. Keep the JSON output perfectly formatted without any trailing commas or syntax errors.
 `;
 
