@@ -27,6 +27,7 @@ export interface CaseDiary {
   noOfPwsExaminedSoFar: string;
   noOfPwsExaminedToday: string;
   totalNoOfAccusedCharged: string;
+  totalNoOfAccusedPresent: string; // NEW: matches reference doc's "TOTAL NO. OF ACCUSED PRESENT"
   noOfAccusedPresent: string;
   noOfAccusedAbsent: string;
   remarks: string; // Full text including English/Tamil transcriptions/summaries
@@ -43,4 +44,3 @@ export interface SavedDatabase {
   createdAt: number;
   diaries: CaseDiary[];
 }
-

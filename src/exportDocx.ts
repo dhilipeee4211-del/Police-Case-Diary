@@ -1,72 +1,185 @@
-import { 
-  Document, 
-  Packer, 
-  Paragraph, 
-  TextRun, 
-  Table, 
-  TableRow, 
-  TableCell, 
-  WidthType, 
-  AlignmentType, 
-  BorderStyle, 
-  HeadingLevel, 
-  VerticalAlign 
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  AlignmentType,
+  BorderStyle,
+  VerticalAlign,
 } from "docx";
 import { CaseDiary } from "./types";
 
 /**
- * Creates the complete block of DOCX elements (paragraphs, tables, spacing) for a single Case Diary.
- * Formatted exactly like the uploaded PDF layout with ONLY the accused details in a visible table.
- * All other fields are clean, unboxed borderless sections.
+ * Creates the complete block of DOCX elements for a single Case Diary.
+ *
+ * LAYOUT STRATEGY (matches the uploaded PDF exactly):
+ *   The ENTIRE form is ONE master table with a fixed LABEL column and a fixed VALUE
+ *   column, so every label and every value lines up perfectly down the page —
+ *   just like the scanned PDF form. All borders on this master table are invisible.
+ *   The ONLY visible grid lines in the whole document are on the nested
+ *   "Accused" table (S.NO. / NAME AND ADDRESS OF ACCUSED), exactly like the source.
  */
-function createDiaryChildren(diary: CaseDiary): any[] {
-  // Thin border style for the Accused table grid
-  const thinBorder = {
-    style: BorderStyle.SINGLE,
-    size: 4,
-    color: "CCCCCC",
-  };
 
-  // None border style for removing borders from other alignment grids
-  const noneBorder = {
-    style: BorderStyle.NONE,
-  };
+// Thin visible border — used ONLY for the Accused table grid
+const thinBorder = {
+  style: BorderStyle.SINGLE,
+  size: 4,
+  color: "999999",
+};
 
-  const boldText = (text: string, size = 10) => new TextRun({ text, bold: true, size: size * 2, font: "Arial" });
-  const normalText = (text: string, size = 10) => new TextRun({ text: text || "NIL", size: size * 2, font: "Arial" });
+// Invisible border — used for every other cell in the document
+const noneBorder = {
+  style: BorderStyle.NONE,
+  size: 0,
+  color: "FFFFFF",
+};
+const noBorders = { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder };
 
-  // Borderless Table row builder
-  const borderlessRow = (label: string, value: string, space = 60) => {
-    return new TableRow({
-      children: [
-        new TableCell({
-          width: { size: 3800, type: WidthType.DXA },
-          borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-          children: [new Paragraph({ children: [boldText(label)], spacing: { before: space, after: space } })],
-        }),
-        new TableCell({
-          width: { size: 5200, type: WidthType.DXA },
-          borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-          children: [new Paragraph({ children: [normalText(value)], spacing: { before: space, after: space } })],
-        }),
-      ],
+// Master grid column widths (DXA). Total ≈ 9000 (6.25in content width).
+const LABEL_WIDTH = 3400;
+const VALUE_WIDTH = 5600;
+const FULL_WIDTH = LABEL_WIDTH + VALUE_WIDTH;
+
+const boldText = (text: string, size = 10) =>
+  new TextRun({ text, bold: true, size: size * 2, font: "Arial" });
+
+const normalText = (text: string, size = 10) =>
+  new TextRun({ text: text || "NIL", size: size * 2, font: "Arial" });
+
+/**
+ * Standard master-grid row: LABEL cell (bold) | VALUE cell (plain).
+ * Both cells are borderless and sit in the document's single shared column grid,
+ * so every row's label/value boundary lines up vertically with every other row.
+ */
+function gridRow(label: string, value: string, opts?: { spaceBefore?: number; spaceAfter?: number }): TableRow {
+  const before = opts?.spaceBefore ?? 60;
+  const after = opts?.spaceAfter ?? 60;
+  return new TableRow({
+    children: [
+      new TableCell({
+        width: { size: LABEL_WIDTH, type: WidthType.DXA },
+        borders: noBorders,
+        verticalAlign: VerticalAlign.TOP,
+        children: [
+          new Paragraph({
+            spacing: { before, after },
+            children: [boldText(label)],
+          }),
+        ],
+      }),
+      new TableCell({
+        width: { size: VALUE_WIDTH, type: WidthType.DXA },
+        borders: noBorders,
+        verticalAlign: VerticalAlign.TOP,
+        children: [
+          new Paragraph({
+            spacing: { before, after },
+            children: [normalText(value)],
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+/**
+ * A full-width row split into FOUR cells: label1 | value1 | label2 | value2.
+ * Used for "POLICE STATION | DISTRICT" and "COURT REF. NO. | HEARING NO." style
+ * pairs. Giving each piece its own properly-sized cell (rather than cramming
+ * "label + value" text into one narrow LABEL_WIDTH cell) keeps every value on
+ * the SAME line as its label — no more wrapping to the next line.
+ * Still lands inside the master grid via columnSpan so the row's total width
+ * matches every other row in the document.
+ */
+function gridPairRow(
+  label1: string,
+  value1: string,
+  label2: string,
+  value2: string,
+  widths: [number, number, number, number] = [1900, 3000, 1500, 2600]
+): TableRow {
+  const [w1, w2, w3, w4] = widths;
+  const cell = (width: number, runs: TextRun[]) =>
+    new TableCell({
+      width: { size: width, type: WidthType.DXA },
+      borders: noBorders,
+      verticalAlign: VerticalAlign.TOP,
+      children: [new Paragraph({ spacing: { before: 80, after: 80 }, children: runs })],
     });
-  };
 
-  // Build Accused List table rows
+  return new TableRow({
+    children: [
+      cell(w1, [boldText(label1)]),
+      cell(w2, [normalText(value1)]),
+      cell(w3, [boldText(label2)]),
+      cell(w4, [normalText(value2)]),
+    ],
+  });
+}
+
+/**
+ * A full-width row used for section headers (e.g. "III.ACCUSED") and for any
+ * content that should span the entire LABEL+VALUE width (nested tables, remarks
+ * paragraphs, blank spacer rows). columnSpan keeps it inside the same master grid.
+ */
+function fullWidthRow(content: any[]): TableRow {
+  return new TableRow({
+    children: [
+      new TableCell({
+        width: { size: FULL_WIDTH, type: WidthType.DXA },
+        columnSpan: 2,
+        borders: noBorders,
+        children: content.length > 0 ? content : [new Paragraph({ children: [] })],
+      }),
+    ],
+  });
+}
+
+/** Blank spacer row (full width, invisible, just for vertical breathing room). */
+function spacerRow(height = 120): TableRow {
+  return fullWidthRow([new Paragraph({ spacing: { before: 0, after: height }, children: [] })]);
+}
+
+/** Section header row: bold heading text spanning the full width (e.g. "III.ACCUSED"). */
+function sectionHeaderRow(text: string): TableRow {
+  return fullWidthRow([
+    new Paragraph({
+      spacing: { before: 100, after: 100 },
+      children: [new TextRun({ text, bold: true, size: 20, font: "Arial" })],
+    }),
+  ]);
+}
+
+function createDiaryChildren(diary: CaseDiary): any[] {
+  // ---- Nested Accused table (the ONLY visible-border table in the document) ----
   const accusedHeaders = new TableRow({
     children: [
       new TableCell({
         width: { size: 1000, type: WidthType.DXA },
         borders: { bottom: thinBorder, right: thinBorder, top: thinBorder, left: thinBorder },
         shading: { fill: "F3F4F6" },
-        children: [new Paragraph({ children: [boldText("S.NO.")], alignment: AlignmentType.CENTER, spacing: { before: 60, after: 60 } })],
+        children: [
+          new Paragraph({
+            children: [boldText("S.NO.")],
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 60, after: 60 },
+          }),
+        ],
       }),
       new TableCell({
         width: { size: 8000, type: WidthType.DXA },
         borders: { bottom: thinBorder, right: thinBorder, top: thinBorder, left: thinBorder },
         shading: { fill: "F3F4F6" },
-        children: [new Paragraph({ children: [boldText("NAME AND ADDRESS OF ACCUSED")], spacing: { before: 60, after: 60 } })],
+        children: [
+          new Paragraph({
+            children: [boldText("NAME AND ADDRESS OF ACCUSED")],
+            spacing: { before: 60, after: 60 },
+          }),
+        ],
       }),
     ],
   });
@@ -77,18 +190,28 @@ function createDiaryChildren(diary: CaseDiary): any[] {
         new TableCell({
           width: { size: 1000, type: WidthType.DXA },
           borders: { bottom: thinBorder, right: thinBorder, top: thinBorder, left: thinBorder },
-          children: [new Paragraph({ children: [normalText(acc.sNo)], alignment: AlignmentType.CENTER, spacing: { before: 60, after: 60 } })],
+          children: [
+            new Paragraph({
+              children: [normalText(acc.sNo)],
+              alignment: AlignmentType.CENTER,
+              spacing: { before: 60, after: 60 },
+            }),
+          ],
         }),
         new TableCell({
           width: { size: 8000, type: WidthType.DXA },
           borders: { bottom: thinBorder, right: thinBorder, top: thinBorder, left: thinBorder },
-          children: [new Paragraph({ children: [normalText(acc.nameAndAddress)], spacing: { before: 60, after: 60 } })],
+          children: [
+            new Paragraph({
+              children: [normalText(acc.nameAndAddress)],
+              spacing: { before: 60, after: 60 },
+            }),
+          ],
         }),
       ],
     });
   });
 
-  // If accused list is empty, add a placeholder row
   if (accusedRows.length === 0) {
     accusedRows.push(
       new TableRow({
@@ -98,11 +221,11 @@ function createDiaryChildren(diary: CaseDiary): any[] {
             columnSpan: 2,
             borders: { bottom: thinBorder, right: thinBorder, top: thinBorder, left: thinBorder },
             children: [
-              new Paragraph({ 
-                children: [normalText("No accused charged/listed")], 
+              new Paragraph({
+                children: [normalText("No accused charged/listed")],
                 alignment: AlignmentType.CENTER,
-                spacing: { before: 60, after: 60 } 
-              })
+                spacing: { before: 60, after: 60 },
+              }),
             ],
           }),
         ],
@@ -110,276 +233,152 @@ function createDiaryChildren(diary: CaseDiary): any[] {
     );
   }
 
+  const accusedTable = new Table({
+    width: { size: 9000, type: WidthType.DXA },
+    columnWidths: [1000, 8000],
+    rows: [accusedHeaders, ...accusedRows],
+  });
+
+  // ---- Remarks: flowing paragraph(s) with **bold** inline marker support ----
+  const parseInlineRuns = (line: string): TextRun[] => {
+    const parts = line.split(/(\*\*.*?\*\*)/g).filter((p) => p.length > 0);
+    if (parts.length === 0) return [normalText(line)];
+    return parts.map((part) => {
+      const boldMatch = part.match(/^\*\*(.*)\*\*$/);
+      if (boldMatch) return boldText(boldMatch[1]);
+      return normalText(part);
+    });
+  };
+
+  const remarksText = diary.remarks || "NIL";
+  const remarksParagraphs = remarksText
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map(
+      (line) =>
+        new Paragraph({
+          children: parseInlineRuns(line),
+          spacing: { before: 40, after: 40 },
+        })
+    );
+  if (remarksParagraphs.length === 0) {
+    remarksParagraphs.push(new Paragraph({ children: [normalText("NIL")], spacing: { before: 40, after: 40 } }));
+  }
+
+  // ---- THE MASTER TABLE: every row below lands in the SAME two-column grid ----
+  const masterRows: TableRow[] = [
+    // POLICE STATION / DISTRICT
+    gridPairRow("POLICE STATION  ", diary.policeStation, "DISTRICT ", diary.district, [1900, 3200, 1300, 2600]),
+
+    spacerRow(100),
+
+    // Primary metadata
+    gridRow("CR. NO. & SEC. OF LAW :", diary.crNoAndSecOfLaw),
+    gridRow("DATE, TIME & PLACE OF OCCURRENCE", diary.dateTimeAndPlaceOfOccurrence),
+    gridRow("DATE OF CD", diary.dateOfCd),
+    gridRow("I.DATE OF REPORT / TIME", diary.dateOfReportTime),
+    gridRow("II.COMPLAINANT", diary.complainant),
+
+    spacerRow(140),
+
+    // III. ACCUSED — heading + nested visible-grid table, both full width
+    sectionHeaderRow("III.ACCUSED"),
+    fullWidthRow([accusedTable as any]),
+
+    spacerRow(140),
+
+    // IV. PROPERTY LOST DETAILS
+    sectionHeaderRow("IV.PROPERTY LOST DETAILS"),
+    fullWidthRow([
+      new Paragraph({
+        children: [normalText(diary.propertyLostDetails || "NIL")],
+        spacing: { before: 20, after: 100 },
+        indent: { left: 200 },
+      }),
+    ]),
+
+    // V. RECOVERED PROPERTY DETAILS
+    sectionHeaderRow("V.RECOVERED PROPERTY DETAILS"),
+    fullWidthRow([
+      new Paragraph({
+        children: [normalText(diary.recoveredPropertyDetails || "NIL")],
+        spacing: { before: 20, after: 100 },
+        indent: { left: 200 },
+      }),
+    ]),
+
+    spacerRow(100),
+
+    // VI / VII
+    gridRow("VI.DATE OF PREVIOUS CASE DIARY", diary.dateOfPreviousCaseDiary),
+    gridRow("VII.STAGE OF THE CASE", diary.stageOfTheCase),
+
+    spacerRow(100),
+
+    // COURT REF. NO. / HEARING NO.
+    gridPairRow("COURT REF. NO.  ", diary.courtRefNo, "HEARING NO.  ", diary.hearingNo, [1900, 2700, 1700, 2700]),
+
+    spacerRow(100),
+
+    // Court stats & attendance
+    gridRow("COURT NAME AND PLACE", diary.courtNameAndPlace),
+    gridRow("WHETHER MAGISTRATE PRESENT ?", diary.whetherMagistratePresent),
+    gridRow("WHETHER APP / PP PRESENT ?", diary.whetherAppPpPresent),
+    gridRow("WHETHER DEFENCE COUNSEL PRESENT ?", diary.whetherDefenceCounselPresent),
+    gridRow("NO. OF PWs CITED", diary.noOfPwsCited),
+    gridRow("NO.OF PWs EXAMINED SO FAR", diary.noOfPwsExaminedSoFar),
+    gridRow("NO.OF PWs EXAMINED TODAY", diary.noOfPwsExaminedToday),
+    gridRow("NO.OF ACCUSED CHARGED", diary.totalNoOfAccusedCharged),
+    gridRow("TOTAL NO. OF ACCUSED PRESENT", diary.totalNoOfAccusedPresent),
+    gridRow("NO. OF ACCUSED PRESENT", diary.noOfAccusedPresent),
+    gridRow("NO. OF ACCUSED ABSENT", diary.noOfAccusedAbsent),
+
+    spacerRow(160),
+
+    // REMARKS
+    sectionHeaderRow("REMARKS"),
+    fullWidthRow(remarksParagraphs),
+
+    spacerRow(100),
+
+    // Posted / Next Hearing / Attended By
+    gridRow("POSTED FOR", diary.postedFor),
+    gridRow("NEXT HEARING DATE", diary.nextHearingDate),
+    gridRow("ATTENDED BY", diary.attendedBy),
+
+    spacerRow(280),
+
+    // SHO Signature — right aligned, full width
+    fullWidthRow([
+      new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        spacing: { before: 100, after: 40 },
+        children: [new TextRun({ text: "Signature of SHO", bold: true, size: 20, font: "Arial" })],
+      }),
+    ]),
+  ];
+
+  const masterTable = new Table({
+    width: { size: FULL_WIDTH, type: WidthType.DXA },
+    columnWidths: [LABEL_WIDTH, VALUE_WIDTH],
+    borders: noBorders,
+    rows: masterRows,
+  });
+
   return [
-    // Header Title Centered
+    // ---- Header ----
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { before: 100, after: 60 },
-      children: [
-        new TextRun({
-          text: "TAMILNADU POLICE",
-          bold: true,
-          size: 28, // 14pt
-          font: "Arial",
-        }),
-      ],
+      children: [new TextRun({ text: "TAMILNADU POLICE", bold: true, size: 28, font: "Arial" })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { after: 240 },
-      children: [
-        new TextRun({
-          text: "PT - CASE DIARY",
-          bold: true,
-          size: 22, // 11pt
-          font: "Arial",
-        }),
-      ],
+      children: [new TextRun({ text: "PT - CASE DIARY", bold: true, size: 22, font: "Arial" })],
     }),
 
-    // POLICE STATION & DISTRICT (Side-by-side borderless table)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [2200, 2300, 1800, 2700],
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              width: { size: 2200, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [boldText("POLICE STATION  ")], spacing: { before: 80, after: 80 } })],
-            }),
-            new TableCell({
-              width: { size: 2300, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [normalText(diary.policeStation)], spacing: { before: 80, after: 80 } })],
-            }),
-            new TableCell({
-              width: { size: 1800, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [boldText("DISTRICT ")], spacing: { before: 80, after: 80 } })],
-            }),
-            new TableCell({
-              width: { size: 2700, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [normalText(diary.district)], spacing: { before: 80, after: 80 } })],
-            }),
-          ],
-        }),
-      ],
-    }),
-
-    new Paragraph({ spacing: { before: 120, after: 60 } }),
-
-    // Primary Metadata (Borderless table)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [3800, 5200],
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        borderlessRow("CR. NO. & SEC. OF LAW :", diary.crNoAndSecOfLaw),
-        borderlessRow("DATE, TIME & PLACE OF OCCURRENCE", diary.dateTimeAndPlaceOfOccurrence),
-        borderlessRow("DATE OF CD", diary.dateOfCd),
-        borderlessRow("I.DATE OF REPORT / TIME", diary.dateOfReportTime),
-        borderlessRow("II.COMPLAINANT", diary.complainant),
-      ],
-    }),
-
-    new Paragraph({ spacing: { before: 180, after: 60 } }),
-
-    // III.ACCUSED (Simple Heading)
-    new Paragraph({
-      spacing: { before: 120, after: 120 },
-      children: [new TextRun({ text: "III.ACCUSED", bold: true, size: 20, font: "Arial" })],
-    }),
-
-    // Accused Table (The ONLY visual grid table in the entire layout)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [1000, 8000],
-      rows: [accusedHeaders, ...accusedRows],
-    }),
-
-    new Paragraph({ spacing: { before: 180, after: 60 } }),
-
-    // IV.PROPERTY LOST DETAILS
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              borders: { top: noneBorder, bottom: thinBorder, left: noneBorder, right: noneBorder },
-              children: [
-                new Paragraph({
-                  children: [boldText("IV.PROPERTY LOST DETAILS")],
-                  spacing: { before: 120, after: 60 },
-                }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: diary.propertyLostDetails || "NIL", size: 20, font: "Arial" })],
-      spacing: { before: 40, after: 120 },
-      indent: { left: 360 },
-    }),
-
-    // V.RECOVERED PROPERTY DETAILS
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              borders: { top: noneBorder, bottom: thinBorder, left: noneBorder, right: noneBorder },
-              children: [
-                new Paragraph({
-                  children: [boldText("V.RECOVERED PROPERTY DETAILS")],
-                  spacing: { before: 120, after: 60 },
-                }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: diary.recoveredPropertyDetails || "NIL", size: 20, font: "Arial" })],
-      spacing: { before: 40, after: 120 },
-      indent: { left: 360 },
-    }),
-
-    new Paragraph({ spacing: { before: 120, after: 60 } }),
-
-    // Secondary Metadata (Borderless table)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [3800, 5200],
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        borderlessRow("VI.DATE OF PREVIOUS CASE DIARY", diary.dateOfPreviousCaseDiary),
-        borderlessRow("VII.STAGE OF THE CASE", diary.stageOfTheCase),
-      ],
-    }),
-
-    new Paragraph({ spacing: { before: 120, after: 60 } }),
-
-    // COURT REF. NO. & HEARING NO. (Side-by-side)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [2200, 2300, 1800, 2700],
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              width: { size: 2200, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [boldText("COURT REF. NO. ")], spacing: { before: 80, after: 80 } })],
-            }),
-            new TableCell({
-              width: { size: 2300, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [normalText(diary.courtRefNo)], spacing: { before: 80, after: 80 } })],
-            }),
-            new TableCell({
-              width: { size: 1800, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [boldText("HEARING NO. ")], spacing: { before: 80, after: 80 } })],
-            }),
-            new TableCell({
-              width: { size: 2700, type: WidthType.DXA },
-              borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-              children: [new Paragraph({ children: [normalText(diary.hearingNo)], spacing: { before: 80, after: 80 } })],
-            }),
-          ],
-        }),
-      ],
-    }),
-
-    new Paragraph({ spacing: { before: 120, after: 60 } }),
-
-    // Court Stats & Attendance (Borderless table)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [3800, 5200],
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        borderlessRow("COURT NAME AND PLACE", diary.courtNameAndPlace),
-        borderlessRow("WHETHER MAGISTRATE PRESENT ?", diary.whetherMagistratePresent),
-        borderlessRow("WHETHER APP / PP PRESENT ?", diary.whetherAppPpPresent),
-        borderlessRow("WHETHER DEFENCE COUNSEL PRESENT ?", diary.whetherDefenceCounselPresent),
-        borderlessRow("NO. OF PWs CITED", diary.noOfPwsCited),
-        borderlessRow("NO.OF PWs EXAMINED SO FAR", diary.noOfPwsExaminedSoFar),
-        borderlessRow("NO.OF PWs EXAMINED TODAY", diary.noOfPwsExaminedToday),
-        borderlessRow("TOTAL NO. OF ACCUSED CHARGED", diary.totalNoOfAccusedCharged),
-        borderlessRow("NO. OF ACCUSED PRESENT", diary.noOfAccusedPresent),
-        borderlessRow("NO. OF ACCUSED ABSENT", diary.noOfAccusedAbsent),
-      ],
-    }),
-
-    new Paragraph({ spacing: { before: 200, after: 60 } }),
-
-    // REMARKS Section (Preserves exact line breaks for Tamil voice typing and typewriter copies)
-    new Paragraph({
-      children: [new TextRun({ text: "REMARKS", bold: true, size: 22, font: "Arial" })],
-      spacing: { before: 180, after: 80 },
-    }),
-    ...((diary.remarks || "NIL").split("\n").map((line) => {
-      return new Paragraph({
-        children: [new TextRun({ text: line || " ", size: 20, font: "Arial" })],
-        spacing: { before: 40, after: 40 },
-        indent: { left: 240 },
-      });
-    })),
-
-    new Paragraph({ spacing: { before: 120, after: 60 } }),
-
-    // Posted / Next Hearing (Borderless table)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [3800, 5200],
-      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
-      rows: [
-        borderlessRow("POSTED FOR", diary.postedFor),
-        borderlessRow("NEXT HEARING DATE", diary.nextHearingDate),
-        borderlessRow("ATTENDED BY", diary.attendedBy),
-      ],
-    }),
-
-    new Paragraph({ spacing: { before: 360, after: 120 } }),
-
-    // SHO Signature box right-aligned exactly like original PDF scan
-    new Paragraph({
-      alignment: AlignmentType.RIGHT,
-      spacing: { before: 300, after: 40 },
-      children: [
-        new TextRun({
-          text: "Signature of SHO",
-          bold: true,
-          size: 20,
-          font: "Arial",
-        }),
-      ],
-    }),
-    new Paragraph({
-      alignment: AlignmentType.RIGHT,
-      children: [
-        new TextRun({
-          text: "________________________",
-          size: 20,
-          font: "Arial",
-        }),
-      ],
-    }),
+    masterTable,
   ];
 }
 
@@ -401,7 +400,7 @@ export async function generateCaseDiaryDocx(diary: CaseDiary): Promise<Blob> {
 
 /**
  * Generates a single Microsoft Word document (.docx) combining multiple Case Diaries,
- * separated by standard Word page breaks.
+ * separated by standard Word section/page breaks.
  */
 export async function generateMultipleCaseDiariesDocx(diaries: CaseDiary[]): Promise<Blob> {
   const doc = new Document({
