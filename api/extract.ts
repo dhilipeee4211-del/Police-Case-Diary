@@ -32,7 +32,14 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
 
     const prompt = `
 Analyze the uploaded Tamil Nadu Police Case Diary PDF document and extract ALL distinct case diary entries or hearing records contained in it.
@@ -81,27 +88,57 @@ Ensure that you:
 4. Keep the JSON output perfectly formatted without any trailing commas or syntax errors.
 `;
 
-    const modelsToTry = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
+    const modelsToTry = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
     let lastError: any = null;
     let extractedData: any = null;
 
+    // Robust retry utility for temporary API overloads (503 / 429 / UNAVAILABLE)
+    const retryWithBackoff = async <T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
+      try {
+        return await fn();
+      } catch (error: any) {
+        const errStr = String(error.message || error);
+        const isRetryable =
+          error.status === 429 ||
+          error.status === 503 ||
+          error.status === 'UNAVAILABLE' ||
+          error.code === 503 ||
+          error.code === 429 ||
+          errStr.includes('503') ||
+          errStr.includes('429') ||
+          errStr.includes('UNAVAILABLE') ||
+          errStr.includes('overloaded') ||
+          errStr.includes('high demand') ||
+          errStr.includes('Resource has been exhausted');
+
+        if (retries > 0 && isRetryable) {
+          console.warn(`Retryable error encountered (${errStr}). Retrying in ${delay}ms... (${retries} attempts left)`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          return retryWithBackoff(fn, retries - 1, delay * 2);
+        }
+        throw error;
+      }
+    };
+
     for (const modelName of modelsToTry) {
       try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [
-            {
-              inlineData: {
-                data: file,
-                mimeType: 'application/pdf',
+        const response = await retryWithBackoff(() =>
+          ai.models.generateContent({
+            model: modelName,
+            contents: [
+              {
+                inlineData: {
+                  data: file,
+                  mimeType: 'application/pdf',
+                },
               },
+              prompt,
+            ],
+            config: {
+              responseMimeType: 'application/json',
             },
-            prompt,
-          ],
-          config: {
-            responseMimeType: 'application/json',
-          },
-        });
+          })
+        );
 
         const responseText = response.text;
         if (!responseText) {
