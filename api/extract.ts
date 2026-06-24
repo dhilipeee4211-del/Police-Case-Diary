@@ -1,54 +1,34 @@
-import express from 'express';
-import path from 'path';
-import multer from 'multer';
 import { GoogleGenAI } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
-import dotenv from 'dotenv';
 
-// Load environment variables
-dotenv.config();
+export default async function handler(req: any, res: any) {
+  // Set CORS and parse options
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(200).end();
+  }
 
-const app = express();
-const PORT = 3000;
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
-// Initialize Multer for in-memory file storage robustly for ESM / CJS interop
-const multerFn = typeof multer === 'function' ? multer : (multer as any).default || multer;
-const storage = (multerFn.memoryStorage || (multer as any).memoryStorage)();
-const upload = multerFn({
-  storage,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25 MB limit
-  },
-});
-
-// JSON parsing middleware with increased limit for base64 files
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// API: Parse / Extract PDF details using Gemini 2.5 Flash
-app.post('/api/extract', upload.single('file'), async (req, res) => {
   try {
-    let base64Pdf = '';
-    let fileName = '';
+    const { file, filename } = req.body || {};
 
-    if (req.file) {
-      base64Pdf = req.file.buffer.toString('base64');
-      fileName = req.file.originalname;
-    } else if (req.body && req.body.file) {
-      base64Pdf = req.body.file;
-      fileName = req.body.filename || 'uploaded.pdf';
-    } else {
-      return res.status(400).json({ error: 'No file uploaded or provided in the payload.' });
+    if (!file) {
+      return res.status(400).json({ error: 'No file data provided in the payload.' });
     }
 
-    if (!fileName.toLowerCase().endsWith('.pdf')) {
-      return res.status(400).json({ error: 'Only PDF files are supported' });
+    const name = filename || 'document.pdf';
+    if (!name.toLowerCase().endsWith('.pdf')) {
+      return res.status(400).json({ error: 'Only PDF files are supported.' });
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return res.status(500).json({
-        error: 'GEMINI_API_KEY environment variable is not configured. Please define it in your Secrets.',
+        error: 'GEMINI_API_KEY environment variable is not configured. Please define it in your Vercel Project Settings.',
       });
     }
 
@@ -107,13 +87,12 @@ Ensure that you:
 
     for (const modelName of modelsToTry) {
       try {
-        console.log(`Attempting document extraction with model: ${modelName}`);
         const response = await ai.models.generateContent({
           model: modelName,
           contents: [
             {
               inlineData: {
-                data: base64Pdf,
+                data: file,
                 mimeType: 'application/pdf',
               },
             },
@@ -129,59 +108,26 @@ Ensure that you:
           throw new Error('Gemini API returned an empty response.');
         }
 
-        // Try parsing the response directly
         extractedData = JSON.parse(responseText.trim());
-        console.log(`Successfully extracted document contents using model: ${modelName}`);
-        break; // Exit the loop on success
+        break; 
       } catch (err: any) {
-        console.warn(`Model ${modelName} failed or was overloaded:`, err.message || err);
         lastError = err;
       }
     }
 
     if (!extractedData) {
       throw new Error(
-        lastError?.message || 'All attempted Gemini models returned errors or were unavailable due to high demand. Please try again in a moment.'
+        lastError?.message || 'All attempted Gemini models returned errors or were unavailable.'
       );
     }
 
-    return res.json({ success: true, data: extractedData });
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.status(200).json({ success: true, data: extractedData });
   } catch (error: any) {
-    console.error('Extraction error:', error);
+    console.error('Extraction handler error:', error);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(500).json({
-      error: 'Failed to extract document contents. ' + (error.message || ''),
+      error: 'Failed to extract document contents: ' + (error.message || ''),
     });
   }
-});
-
-// Error handling middleware for clean JSON errors instead of HTML fallback
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Express global error handler:', err);
-  res.status(err.status || 500).json({
-    success: false,
-    error: err.message || 'An internal server error occurred during formatting reconstruction.',
-  });
-});
-
-// Setup Vite Dev server middleware or serve production assets
-async function setupServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
 }
-
-setupServer();

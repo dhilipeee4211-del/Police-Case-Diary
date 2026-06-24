@@ -205,13 +205,31 @@ export default function App() {
       }
     }, 350);
 
-    const formData = new FormData();
-    formData.append('file', selectedFile);
+    // Helper to read file as base64 string
+    const fileToBase64 = (file: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => {
+          const base64String = reader.result as string;
+          const base64 = base64String.split(',')[1];
+          resolve(base64);
+        };
+        reader.onerror = (error) => reject(error);
+      });
+    };
 
     try {
+      const base64Data = await fileToBase64(selectedFile);
       const response = await fetch('/api/extract', {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          file: base64Data,
+          filename: selectedFile.name,
+        }),
       });
 
       if (!response.ok) {
