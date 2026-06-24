@@ -35,3 +35,12 @@ export interface CaseDiary {
   attendedBy: string;
   isSavedDraft?: boolean;
 }
+
+export interface SavedDatabase {
+  id: string;
+  userId: string;
+  name: string;
+  createdAt: number;
+  diaries: CaseDiary[];
+}
+
