@@ -14,7 +14,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID || "c7d17f7b-a173-4208-a3a4-73a656abd345");
 
 export { db };
 
