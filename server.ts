@@ -516,9 +516,12 @@ Ensure that you:
 
 // --- Server-Side Lightweight Fast Database Sync API ---
 import fs from 'fs';
+import os from 'os';
 import { createClient } from '@supabase/supabase-js';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL 
+  ? path.join(os.tmpdir(), 'police-case-diary-data')
+  : path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'databases.json');
 
 // Ensure the data directory exists
@@ -892,4 +895,8 @@ async function setupServer() {
   });
 }
 
-setupServer();
+if (!process.env.VERCEL) {
+  setupServer();
+}
+
+export default app;
