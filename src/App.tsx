@@ -75,6 +75,38 @@ export default function App() {
   const [showSaveDbPrompt, setShowSaveDbPrompt] = useState<boolean>(false);
   const [saveDbStatus, setSaveDbStatus] = useState<{ type: 'success' | 'error' | 'loading' | null; message: string | null }>({ type: null, message: null });
   const [sidebarTab, setSidebarTab] = useState<'workspace' | 'history'>('workspace');
+  const [showSupaSetup, setShowSupaSetup] = useState<boolean>(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<{
+    isConfigured: boolean;
+    connectionTest: boolean;
+    tableExists: boolean;
+    testError: string;
+    supabaseUrl: string;
+    sqlSetup: string;
+  } | null>(null);
+  const [isLoadingSupaStatus, setIsLoadingSupaStatus] = useState<boolean>(false);
+
+  const fetchSupabaseStatus = async () => {
+    setIsLoadingSupaStatus(true);
+    try {
+      const res = await fetch('/api/db/status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setSupabaseStatus(data);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching Supabase status:', err);
+    } finally {
+      setIsLoadingSupaStatus(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSupabaseStatus();
+  }, []);
+
   const [loadedDbId, setLoadedDbId] = useState<string | null>(null);
   const [loadedDbName, setLoadedDbName] = useState<string | null>(null);
 
@@ -274,6 +306,24 @@ export default function App() {
     }
   };
 
+  // Debounced Auto-Save back to Local / Server / Cloud Database when editing an active session
+  useEffect(() => {
+    if (!user || !loadedDbId || isSaved || diaries.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const saved = await saveSavedDatabase(loadedDbName || "Database", diaries, user.uid, loadedDbId);
+        setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
+        setIsSaved(true);
+        console.log("Background Auto-Save successful for database:", loadedDbId);
+      } catch (err) {
+        console.error("Background Auto-Save failed:", err);
+      }
+    }, 2000); // 2 second debounce of field edits
+
+    return () => clearTimeout(timer);
+  }, [diaries, loadedDbId, isSaved, user, loadedDbName]);
+
   const handleSaveToDatabase = async () => {
     if (!user) {
       alert("Please log in or enter Guest Mode to save.");
@@ -353,6 +403,7 @@ export default function App() {
       setSelectedDiaryId(dbItem.diaries[0].id);
       setLoadedDbId(dbItem.id);
       setLoadedDbName(dbItem.name);
+      setIsSaved(true);
       setSidebarTab('workspace');
     } else {
       alert("This saved database contains no diary entries.");
@@ -378,7 +429,8 @@ export default function App() {
 
   const handleDeleteDatabase = async (id: string) => {
     if (!user) return;
-    if (window.confirm("Are you sure you want to delete this saved database from your library? This action is permanent.")) {
+    const confirmMsg = "Are you sure you want to permanently delete this database from BOTH local server disk storage and Supabase Cloud? This action is permanent and cannot be undone.";
+    if (window.confirm(confirmMsg)) {
       try {
         await deleteSavedDatabase(id, user.uid);
         setSavedDatabases((prev) => prev.filter((dbItem) => dbItem.id !== id));
@@ -388,6 +440,8 @@ export default function App() {
         if (loadedDbId === id) {
           setLoadedDbId(null);
           setLoadedDbName(null);
+          setDiaries([]);
+          setSelectedDiaryId(null);
         }
       } catch (err) {
         console.error("Delete database error:", err);
@@ -443,6 +497,7 @@ export default function App() {
     setSelectedDiaryId(diaryId);
     setLoadedDbId(dbItem.id);
     setLoadedDbName(dbItem.name);
+    setIsSaved(true);
     setSidebarTab('workspace');
   };
 
@@ -720,12 +775,22 @@ export default function App() {
     }
   };
 
-  const saveWorkspaceChanges = () => {
+  const saveWorkspaceChanges = async () => {
     if (!selectedDiaryId) return;
-    setDiaries((prev) =>
-      prev.map((d) => (d.id === selectedDiaryId ? { ...d, isSavedDraft: true } : d))
-    );
+    const updatedDiaries = diaries.map((d) => (d.id === selectedDiaryId ? { ...d, isSavedDraft: true } : d));
+    setDiaries(updatedDiaries);
     setIsSaved(true);
+    
+    // If inside a loaded database session, sync immediately to keep all tiers in absolute sync
+    if (user && loadedDbId) {
+      try {
+        const saved = await saveSavedDatabase(loadedDbName || "Database", updatedDiaries, user.uid, loadedDbId);
+        setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
+      } catch (err) {
+        console.error("Instant save failed during workspace manual save:", err);
+      }
+    }
+    
     setTimeout(() => setIsSaved(false), 2000);
   };
 
@@ -1024,28 +1089,31 @@ export default function App() {
                 {/* Tabbed Record Selector & Database Library */}
                 <div className="bg-white border border-gray-200/95 rounded-3xl p-6 shadow-[0_4px_30px_rgba(0,0,0,0.02)] flex-1 flex flex-col min-h-[420px]">
                   {/* Tab Headers */}
-                  <div className="flex items-center border-b border-gray-100 mb-4 bg-gray-50/60 p-1 rounded-xl">
+                  <div className="flex items-center border-b border-gray-100 mb-4 bg-gray-50/60 p-1 rounded-xl gap-0.5">
                     <button
                       onClick={() => setSidebarTab('workspace')}
-                      className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer ${
                         sidebarTab === 'workspace'
                           ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
                           : 'text-gray-500 hover:text-gray-800'
                       }`}
                     >
-                      <Layers className="w-3.5 h-3.5" />
-                      Active Workspace ({diaries.length})
+                      <Layers className="w-3 h-3" />
+                      Workspace ({diaries.length})
                     </button>
                     <button
                       onClick={() => setSidebarTab('history')}
-                      className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer relative ${
                         sidebarTab === 'history'
                           ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
                           : 'text-gray-500 hover:text-gray-800'
                       }`}
                     >
-                      <Database className="w-3.5 h-3.5" />
-                      DB Library ({savedDatabases.length})
+                      <Sparkles className="w-3 h-3 text-indigo-500 shrink-0" />
+                      Supabase Cloud DB ({savedDatabases.length})
+                      {supabaseStatus?.isConfigured && (
+                        <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                      )}
                     </button>
                   </div>
 
@@ -1234,17 +1302,89 @@ export default function App() {
 
                   {sidebarTab === 'history' && (
                     <div className="flex-1 flex flex-col">
+                      {/* Connection Status Indicator */}
+                      <div className="flex items-center justify-between mb-3 bg-gray-50/75 p-2 rounded-xl border border-gray-100">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                          <span className="text-[10px] font-bold text-gray-700 truncate">
+                            {supabaseStatus?.isConfigured ? 'Supabase Connected' : 'Supabase Offline'}
+                          </span>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-400'}`} />
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => setShowSupaSetup(!showSupaSetup)}
+                            className="text-[9px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline px-1.5 py-0.5 rounded transition-all cursor-pointer"
+                          >
+                            {showSupaSetup ? 'Hide Setup' : 'Show Setup'}
+                          </button>
+                          <button
+                            onClick={fetchSupabaseStatus}
+                            disabled={isLoadingSupaStatus}
+                            className="p-1 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-gray-800 disabled:opacity-50 cursor-pointer"
+                            title="Refresh connection status"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Setup Overlay Guide */}
+                      {showSupaSetup && (
+                        <div className="mb-4 p-3 rounded-xl border border-indigo-100 bg-indigo-50/20 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-[10px] font-bold text-indigo-950 uppercase tracking-wider">Supabase Setup Guide</h4>
+                            <button
+                              onClick={() => {
+                                const sqlText = supabaseStatus?.sqlSetup || `-- Create the case_databases table\nCREATE TABLE IF NOT EXISTS case_databases (\n  id TEXT PRIMARY KEY,\n  user_id TEXT NOT NULL,\n  name TEXT NOT NULL,\n  created_at BIGINT NOT NULL,\n  diaries JSONB NOT NULL DEFAULT '[]'::jsonb\n);\n\n-- Enable Row Level Security (RLS)\nALTER TABLE case_databases ENABLE ROW LEVEL SECURITY;\n\n-- Create policy to allow all users to select their own records\nCREATE POLICY "Allow select for user" ON case_databases\n  FOR SELECT USING (true);\n\n-- Create policy to allow all users to insert their own records\nCREATE POLICY "Allow insert for user" ON case_databases\n  FOR INSERT WITH CHECK (true);\n\n-- Create policy to allow all users to update their own records\nCREATE POLICY "Allow update for user" ON case_databases\n  FOR UPDATE USING (true);\n\n-- Create policy to allow all users to delete their own records\nCREATE POLICY "Allow delete for user" ON case_databases\n  FOR DELETE USING (true);`;
+                                navigator.clipboard.writeText(sqlText);
+                                alert("Setup SQL code copied to your clipboard!");
+                              }}
+                              className="text-[9px] text-white font-bold px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-700 transition-colors cursor-pointer"
+                            >
+                              Copy SQL
+                            </button>
+                          </div>
+                          
+                          <p className="text-[9px] text-indigo-900 leading-normal font-medium">
+                            {supabaseStatus?.isConfigured ? (
+                              <span>Connected to: <code className="bg-white/80 px-1 py-0.5 border border-indigo-100 rounded text-[8px] font-mono">{supabaseStatus.supabaseUrl}</code></span>
+                            ) : (
+                              <span>Define <code className="bg-white/80 px-1 border border-indigo-200 rounded font-mono font-bold">VITE_SUPABASE_URL</code> and <code className="bg-white/80 px-1 border border-indigo-200 rounded font-mono font-bold">VITE_SUPABASE_ANON_KEY</code> in project secrets.</span>
+                            )}
+                          </p>
+
+                          <div className="p-2 bg-gray-950 text-gray-200 rounded-lg font-mono text-[8px] leading-relaxed select-all overflow-x-auto max-h-[140px] whitespace-pre-wrap border border-gray-800 shadow-inner">
+                            {supabaseStatus?.sqlSetup || `-- Run in Supabase SQL editor`}
+                          </div>
+                        </div>
+                      )}
+
                       {isLoadingDbs ? (
                         <div className="flex-1 flex flex-col items-center justify-center py-10">
                           <RefreshCw className="w-6 h-6 text-indigo-600 animate-spin mb-2" />
                           <p className="text-xs font-semibold text-gray-500">Loading your database library...</p>
                         </div>
+                      ) : !supabaseStatus?.isConfigured ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-amber-50/20 rounded-2xl border border-amber-100/50 min-h-[300px]">
+                          <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse mb-2" />
+                          <p className="text-xs font-bold text-indigo-950">Cloud Database Unconfigured</p>
+                          <p className="text-[10px] text-indigo-700/80 mt-1 max-w-[210px] leading-relaxed font-medium">
+                            Define VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your settings to unlock persistent cloud storage.
+                          </p>
+                          <button
+                            onClick={() => setShowSupaSetup(true)}
+                            className="mt-3.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-all shadow-xs"
+                          >
+                            View Setup Guide
+                          </button>
+                        </div>
                       ) : savedDatabases.length === 0 ? (
                         <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-gray-50/50 rounded-2xl border border-gray-100 min-h-[300px]">
                           <Database className="w-8 h-8 text-gray-300 mb-2" />
-                          <p className="text-xs font-semibold text-gray-500">Your Database Library is Empty</p>
+                          <p className="text-xs font-semibold text-gray-500">No Databases Stored on Supabase</p>
                           <p className="text-[10px] text-gray-400 mt-1 max-w-[210px] leading-relaxed">
-                            Once you load and reconstruct a scanned PDF, click <strong>"Save DB"</strong> above to store your case records permanently.
+                            Once you load and reconstruct a scanned PDF, click <strong>"Save DB"</strong> above to store your case records in the Cloud.
                           </p>
                         </div>
                       ) : (
@@ -1529,24 +1669,7 @@ export default function App() {
                             />
                           </div>
                           <div>
-                            <div className="flex items-center justify-between">
-                              <label className="block text-[10px] font-bold text-gray-500 uppercase">CR. No. & Sec of Law</label>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  handleFieldChange('stageOfTheCase', 'CASE DISPOSED');
-                                  handleFieldChange('nextHearingDate', '');
-                                }}
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
-                                  activeDiary.stageOfTheCase === 'CASE DISPOSED'
-                                    ? 'bg-red-500 text-white border-red-600 shadow-xs'
-                                    : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
-                                }`}
-                                title="Click to dispose of this case immediately"
-                              >
-                                {activeDiary.stageOfTheCase === 'CASE DISPOSED' ? '✓ Case Disposed' : 'Case Disposed'}
-                              </button>
-                            </div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase">CR. No. & Sec of Law</label>
                             <input
                               type="text"
                               value={activeDiary.crNoAndSecOfLaw}
@@ -1667,7 +1790,27 @@ export default function App() {
                         <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">VI. Stage & Court Administration</h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Stage of the Case</label>
+                            <div className="flex items-center justify-between">
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase">Stage of the Case</label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const targetVal = activeDiary.stageOfTheCase === 'CASE DISPOSED' ? 'PENDING TRIAL' : 'CASE DISPOSED';
+                                  handleFieldChange('stageOfTheCase', targetVal);
+                                  if (targetVal === 'CASE DISPOSED') {
+                                    handleFieldChange('nextHearingDate', '');
+                                  }
+                                }}
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
+                                  activeDiary.stageOfTheCase === 'CASE DISPOSED'
+                                    ? 'bg-red-500 text-white border-red-600 shadow-xs'
+                                    : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                                }`}
+                                title="Click to dispose of this case immediately"
+                              >
+                                {activeDiary.stageOfTheCase === 'CASE DISPOSED' ? '✓ Case Disposed' : 'Case Disposed'}
+                              </button>
+                            </div>
                             <input
                               type="text"
                               value={activeDiary.stageOfTheCase}

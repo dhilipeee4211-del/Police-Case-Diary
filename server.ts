@@ -192,6 +192,322 @@ Ensure that you:
   }
 });
 
+// --- Server-Side Lightweight Fast Database Sync API ---
+import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
+
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DB_FILE = path.join(DATA_DIR, 'databases.json');
+
+// Ensure the data directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// Helper to read server databases from disk
+function readServerDatabases(): any[] {
+  try {
+    if (!fs.existsSync(DB_FILE)) {
+      return [];
+    }
+    const data = fs.readFileSync(DB_FILE, 'utf8');
+    return JSON.parse(data || '[]');
+  } catch (err) {
+    console.error('Error reading server databases.json:', err);
+    return [];
+  }
+}
+
+// Helper to write server databases to disk
+function writeServerDatabases(databases: any[]): void {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(databases, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Error writing server databases.json:', err);
+  }
+}
+
+// Initialize Supabase Server Client dynamically if environment variables are set
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+
+const isValidUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+let supabaseServerClient: any = null;
+if (supabaseUrl && supabaseKey && isValidUrl(supabaseUrl)) {
+  try {
+    supabaseServerClient = createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        persistSession: false,
+      },
+    });
+    console.log('Supabase Server Client successfully initialized with URL:', supabaseUrl);
+  } catch (err) {
+    console.error('Failed to initialize Supabase Server Client:', err);
+  }
+} else if (supabaseUrl || supabaseKey) {
+  console.log('Supabase is partially configured but missing a valid HTTP/HTTPS URL or key.');
+}
+
+// Endpoint: Check Supabase configuration and schema status
+app.get('/api/db/status', async (req, res) => {
+  try {
+    const isConfigured = !!supabaseServerClient;
+    const sqlSetup = `-- Create the case_databases table
+CREATE TABLE IF NOT EXISTS case_databases (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  diaries JSONB NOT NULL DEFAULT '[]'::jsonb
+);
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE case_databases ENABLE ROW LEVEL SECURITY;
+
+-- Create policy to allow all users to select their own records
+CREATE POLICY "Allow select for user" ON case_databases
+  FOR SELECT USING (true);
+
+-- Create policy to allow all users to insert their own records
+CREATE POLICY "Allow insert for user" ON case_databases
+  FOR INSERT WITH CHECK (true);
+
+-- Create policy to allow all users to update their own records
+CREATE POLICY "Allow update for user" ON case_databases
+  FOR UPDATE USING (true);
+
+-- Create policy to allow all users to delete their own records
+CREATE POLICY "Allow delete for user" ON case_databases
+  FOR DELETE USING (true);
+`;
+
+    let connectionTest = false;
+    let tableExists = false;
+    let testError = '';
+
+    if (supabaseServerClient) {
+      try {
+        // Simple light query to check if we can reach the database and if table exists
+        const { data, error } = await supabaseServerClient
+          .from('case_databases')
+          .select('id')
+          .limit(1);
+        
+        if (!error) {
+          connectionTest = true;
+          tableExists = true;
+        } else {
+          connectionTest = true;
+          testError = error.message;
+          if (error.code === '42P01') {
+            // Postgres undefined_table error code
+            tableExists = false;
+          }
+        }
+      } catch (err: any) {
+        testError = err.message || String(err);
+      }
+    }
+
+    return res.json({
+      success: true,
+      isConfigured,
+      connectionTest,
+      tableExists,
+      testError,
+      supabaseUrl: supabaseUrl ? `${supabaseUrl.substring(0, 15)}...` : '',
+      sqlSetup,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Error checking status' });
+  }
+});
+
+// Endpoint: List all databases for a specific user (Dual local disk & Supabase)
+app.get('/api/db/list', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing userId parameter' });
+    }
+
+    // Always read from local server storage first as fallback/cache
+    const localDbs = readServerDatabases().filter((db: any) => db.userId === userId);
+
+    if (!supabaseServerClient) {
+      // Supabase unconfigured, return local disk databases
+      localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
+      return res.json({ 
+        success: true, 
+        databases: localDbs, 
+        source: 'disk',
+        error: null 
+      });
+    }
+
+    try {
+      const { data, error } = await supabaseServerClient
+        .from('case_databases')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (error) {
+        console.log('Supabase query error, falling back to disk:', error);
+        localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
+        return res.json({ 
+          success: true, 
+          databases: localDbs, 
+          source: 'disk', 
+          error: error.message 
+        });
+      }
+
+      if (Array.isArray(data)) {
+        // Map snake_case database columns back to camelCase SavedDatabase type
+        const mappedDbs = data.map((item: any) => ({
+          id: item.id,
+          userId: item.user_id,
+          name: item.name,
+          createdAt: Number(item.created_at),
+          diaries: typeof item.diaries === 'string' ? JSON.parse(item.diaries) : item.diaries,
+        }));
+        
+        // Merge Supabase databases with any local disk ones to be perfectly in sync
+        const mergedMap = new Map();
+        localDbs.forEach(db => mergedMap.set(db.id, db));
+        mappedDbs.forEach(db => mergedMap.set(db.id, db));
+        
+        const finalDbs = Array.from(mergedMap.values());
+        
+        // Write the merged result back to local cache
+        const allLocalRest = readServerDatabases().filter((db: any) => db.userId !== userId);
+        writeServerDatabases([...allLocalRest, ...finalDbs]);
+
+        // Sort descending by creation date
+        finalDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
+        console.log(`Loaded ${finalDbs.length} databases (merged Supabase and local cache) for user ${userId}`);
+        return res.json({ success: true, databases: finalDbs, source: 'supabase_merged' });
+      }
+
+      localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
+      return res.json({ success: true, databases: localDbs, source: 'disk' });
+    } catch (err: any) {
+      console.log('Supabase fetch exception, falling back to disk:', err);
+      localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
+      return res.json({ success: true, databases: localDbs, source: 'disk', error: err.message || String(err) });
+    }
+  } catch (err: any) {
+    console.error('Error in /api/db/list:', err);
+    return res.status(500).json({ error: err.message || 'Server database load error' });
+  }
+});
+
+// Endpoint: Save or update a database entry (Dual local disk & Supabase)
+app.post('/api/db/save', async (req, res) => {
+  try {
+    const newDb = req.body;
+    if (!newDb || !newDb.id || !newDb.userId || !newDb.name) {
+      return res.status(400).json({ error: 'Invalid database payload. Missing id, userId, or name.' });
+    }
+
+    // ALWAYS write to local disk first!
+    const allDbs = readServerDatabases();
+    const restDbs = allDbs.filter((db: any) => db.id !== newDb.id);
+    restDbs.push(newDb);
+    writeServerDatabases(restDbs);
+    console.log(`Successfully saved/synced database ${newDb.id} to server local disk.`);
+
+    if (!supabaseServerClient) {
+      return res.json({ success: true, database: newDb, supabaseSynced: false });
+    }
+
+    try {
+      const { error } = await supabaseServerClient
+        .from('case_databases')
+        .upsert({
+          id: newDb.id,
+          user_id: newDb.userId,
+          name: newDb.name,
+          created_at: newDb.createdAt,
+          diaries: newDb.diaries, // JSONB handles objects directly
+        }, { onConflict: 'id' });
+
+      if (error) {
+        console.log('Supabase save error (saved to disk only):', error);
+        return res.json({ 
+          success: true, 
+          database: newDb, 
+          supabaseSynced: false,
+          error: error.message 
+        });
+      }
+      console.log(`Successfully saved/synced database ${newDb.id} to Supabase.`);
+      return res.json({ success: true, database: newDb, supabaseSynced: true });
+    } catch (supaErr: any) {
+      console.log('Supabase save exception (saved to disk only):', supaErr);
+      return res.json({ 
+        success: true, 
+        database: newDb, 
+        supabaseSynced: false, 
+        error: supaErr.message || String(supaErr) 
+      });
+    }
+  } catch (err: any) {
+    console.error('Error in /api/db/save:', err);
+    return res.status(500).json({ error: err.message || 'Server database save error' });
+  }
+});
+
+// Endpoint: Delete a database entry (Dual local disk & Supabase)
+app.post('/api/db/delete', async (req, res) => {
+  try {
+    const { id, userId } = req.body;
+    if (!id || !userId) {
+      return res.status(400).json({ error: 'Missing id or userId' });
+    }
+
+    // ALWAYS delete from local disk first!
+    const allDbs = readServerDatabases();
+    const updatedDbs = allDbs.filter((db: any) => db.id !== id);
+    writeServerDatabases(updatedDbs);
+    console.log(`Successfully deleted database ${id} from server local disk.`);
+
+    if (!supabaseServerClient) {
+      return res.json({ success: true, deleted: true, supabaseSynced: false });
+    }
+
+    try {
+      const { error } = await supabaseServerClient
+        .from('case_databases')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', userId);
+
+      if (error) {
+        console.log('Supabase deletion error (deleted from disk):', error);
+        return res.json({ success: true, deleted: true, supabaseSynced: false, error: error.message });
+      }
+      console.log(`Successfully deleted database ${id} from Supabase.`);
+      return res.json({ success: true, deleted: true, supabaseSynced: true });
+    } catch (supaErr: any) {
+      console.log('Supabase deletion exception (deleted from disk):', supaErr);
+      return res.json({ success: true, deleted: true, supabaseSynced: false, error: supaErr.message || String(supaErr) });
+    }
+  } catch (err: any) {
+    console.error('Error in /api/db/delete:', err);
+    return res.status(500).json({ error: err.message || 'Server database deletion error' });
+  }
+});
+
+
 // Error handling middleware for clean JSON errors instead of HTML fallback
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Express global error handler:', err);

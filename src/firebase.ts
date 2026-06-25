@@ -12,17 +12,30 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || ""
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID || "c7d17f7b-a173-4208-a3a4-73a656abd345");
+let app: any = null;
+let auth: any = null;
+let db: any = null;
+let provider: any = null;
+let isFirebaseInitialized = false;
+
+if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID || "c7d17f7b-a173-4208-a3a4-73a656abd345");
+    provider = new GoogleAuthProvider();
+    // Request Workspace scopes
+    provider.addScope('https://www.googleapis.com/auth/documents');
+    provider.addScope('https://www.googleapis.com/auth/drive.file');
+    isFirebaseInitialized = true;
+  } catch (err) {
+    console.warn("Failed to initialize Firebase services, falling back to guest mode simulation.", err);
+  }
+} else {
+  console.info("Firebase config incomplete or not provided. Running in Guest / Local mode only.");
+}
 
 export { db };
-
-
-const provider = new GoogleAuthProvider();
-// Request Workspace scopes
-provider.addScope('https://www.googleapis.com/auth/documents');
-provider.addScope('https://www.googleapis.com/auth/drive.file');
 
 // Flag to indicate if we are in the middle of a sign-in flow.
 let isSigningIn = false;
@@ -34,6 +47,15 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
+  if (!isFirebaseInitialized || !auth) {
+    // If Firebase is not configured, immediately fire onAuthFailure 
+    // so the app can transition to Guest Access / local storage safely without getting stuck.
+    setTimeout(() => {
+      if (onAuthFailure) onAuthFailure();
+    }, 0);
+    return () => {}; // No-op unsubscribe function
+  }
+
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
       if (cachedAccessToken) {
@@ -51,6 +73,10 @@ export const initAuth = (
 
 // Must be called from a button click or user interaction
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  if (!isFirebaseInitialized || !auth || !provider) {
+    throw new Error('Google Sign-In is not available because Firebase is not configured. Please define VITE_FIREBASE_API_KEY, or continue as Guest Officer.');
+  }
+
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -74,6 +100,8 @@ export const getAccessToken = async (): Promise<string | null> => {
 };
 
 export const logout = async () => {
-  await auth.signOut();
+  if (isFirebaseInitialized && auth) {
+    await auth.signOut();
+  }
   cachedAccessToken = null;
 };

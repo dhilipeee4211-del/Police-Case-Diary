@@ -16,12 +16,11 @@ import { CaseDiary } from "./types";
 /**
  * Creates the complete block of DOCX elements for a single Case Diary.
  *
- * LAYOUT STRATEGY (matches the uploaded PDF exactly):
- *   The ENTIRE form is ONE master table with a fixed LABEL column and a fixed VALUE
- *   column, so every label and every value lines up perfectly down the page —
- *   just like the scanned PDF form. All borders on this master table are invisible.
- *   The ONLY visible grid lines in the whole document are on the nested
- *   "Accused" table (S.NO. / NAME AND ADDRESS OF ACCUSED), exactly like the source.
+ * LAYOUT STRATEGY (resolved overlapping and corruption issues):
+ *   Instead of nesting tables which causes layout overlap and rendering bugs in MS Word,
+ *   we use a sequential flat structure of borderless 2-column/4-column tables and standard
+ *   paragraphs for headings/spacers. All borderless 2-column tables share the same column
+ *   widths so they line up perfectly down the page.
  */
 
 // Thin visible border — used ONLY for the Accused table grid
@@ -51,9 +50,28 @@ const normalText = (text: string, size = 10) =>
   new TextRun({ text: text || "NIL", size: size * 2, font: "Arial" });
 
 /**
+ * Splits a "CR. NO. & SEC. OF LAW" value like
+ *   "0027/2022,  U/s 294(b),323,324,506(2) IPC"
+ * into the CR number ("0027/2022") and the remaining section-of-law text
+ * ("U/s 294(b),323,324,506(2) IPC").
+ */
+function splitCrNumber(value: string): { crNumber: string; rest: string } {
+  const trimmed = (value || "").trim();
+  const commaIdx = trimmed.indexOf(",");
+  if (commaIdx === -1) {
+    return { crNumber: trimmed, rest: "" };
+  }
+  return {
+    crNumber: trimmed.slice(0, commaIdx).trim(),
+    rest: trimmed.slice(commaIdx + 1).trim(),
+  };
+}
+
+const CASE_DISPOSED = "CASE DISPOSED";
+
+/**
  * Standard master-grid row: LABEL cell (bold) | VALUE cell (plain).
- * Both cells are borderless and sit in the document's single shared column grid,
- * so every row's label/value boundary lines up vertically with every other row.
+ * Both cells are borderless and sit in the table column grid.
  */
 function gridRow(label: string, value: string, opts?: { spaceBefore?: number; spaceAfter?: number }): TableRow {
   const before = opts?.spaceBefore ?? 60;
@@ -87,11 +105,63 @@ function gridRow(label: string, value: string, opts?: { spaceBefore?: number; sp
 }
 
 /**
+ * Special row for "CR. NO. & SEC. OF LAW :" — when the case's stage is
+ * "CASE DISPOSED", the CR number portion of the value is styled as a clear,
+ * highlighted text badge to prevent document corruption.
+ */
+function crNoRow(label: string, value: string, stageOfTheCase: string, opts?: { spaceBefore?: number; spaceAfter?: number }): TableRow {
+  const before = opts?.spaceBefore ?? 60;
+  const after = opts?.spaceAfter ?? 60;
+  const isDisposed = (stageOfTheCase || "").trim().toUpperCase() === CASE_DISPOSED;
+
+  let valueChildren: any[];
+  if (isDisposed) {
+    const { crNumber, rest } = splitCrNumber(value);
+    valueChildren = [
+      new TextRun({
+        text: `● DISPOSED ● ( ${crNumber || "NIL"} )`,
+        bold: true,
+        color: "DC2626", // Beautiful crimson/red text
+        size: 22,
+        font: "Arial",
+      }),
+      ...(rest ? [new TextRun({ text: "  ,  " + rest, size: 20, font: "Arial" })] : []),
+    ];
+  } else {
+    valueChildren = [normalText(value)];
+  }
+
+  return new TableRow({
+    children: [
+      new TableCell({
+        width: { size: LABEL_WIDTH, type: WidthType.DXA },
+        borders: noBorders,
+        verticalAlign: VerticalAlign.TOP,
+        children: [
+          new Paragraph({
+            spacing: { before, after },
+            children: [boldText(label)],
+          }),
+        ],
+      }),
+      new TableCell({
+        width: { size: VALUE_WIDTH, type: WidthType.DXA },
+        borders: noBorders,
+        verticalAlign: VerticalAlign.TOP,
+        children: [
+          new Paragraph({
+            spacing: { before, after },
+            children: valueChildren,
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+/**
  * A full-width row split into FOUR cells: label1 | value1 | label2 | value2.
- * Used for "POLICE STATION | DISTRICT" and "COURT REF. NO. | HEARING NO." style
- * pairs. Giving each piece its own properly-sized cell (rather than cramming
- * "label + value" text into one narrow LABEL_WIDTH cell) keeps every value on
- * the SAME line as its label — no more wrapping to the next line.
+ * Used for "POLICE STATION | DISTRICT" and "COURT REF. NO. | HEARING NO." style pairs.
  */
 function gridPairRow(
   label1: string,
@@ -115,44 +185,6 @@ function gridPairRow(
       cell(w2, [normalText(value1)]),
       cell(w3, [boldText(label2)]),
       cell(w4, [normalText(value2)]),
-    ],
-  });
-}
-
-/**
- * Helper to build a 2-column borderless table.
- */
-function twoColumnBorderlessTable(rows: TableRow[]): Table {
-  return new Table({
-    width: { size: FULL_WIDTH, type: WidthType.DXA },
-    columnWidths: [LABEL_WIDTH, VALUE_WIDTH],
-    borders: noBorders,
-    rows,
-  });
-}
-
-/**
- * Helper to build section headers with a clean bottom border line, matching the scan.
- */
-function sectionHeaderWithBorder(text: string): Table {
-  return new Table({
-    width: { size: FULL_WIDTH, type: WidthType.DXA },
-    borders: noBorders,
-    rows: [
-      new TableRow({
-        children: [
-          new TableCell({
-            width: { size: FULL_WIDTH, type: WidthType.DXA },
-            borders: { top: noneBorder, bottom: thinBorder, left: noneBorder, right: noneBorder },
-            children: [
-              new Paragraph({
-                children: [boldText(text)],
-                spacing: { before: 120, after: 60 },
-              }),
-            ],
-          }),
-        ],
-      }),
     ],
   });
 }
@@ -262,12 +294,31 @@ function createDiaryChildren(diary: CaseDiary): any[] {
         new Paragraph({
           children: parseInlineRuns(line),
           spacing: { before: 40, after: 40 },
-          indent: { left: 200 },
         })
     );
   if (remarksParagraphs.length === 0) {
-    remarksParagraphs.push(new Paragraph({ children: [normalText("NIL")], spacing: { before: 40, after: 40 }, indent: { left: 200 } }));
+    remarksParagraphs.push(new Paragraph({ children: [normalText("NIL")], spacing: { before: 40, after: 40 } }));
   }
+
+  // Helpers to create separate sequential borderless tables
+  const create2ColTable = (rows: TableRow[]) => new Table({
+    width: { size: FULL_WIDTH, type: WidthType.DXA },
+    columnWidths: [LABEL_WIDTH, VALUE_WIDTH],
+    borders: noBorders,
+    rows,
+  });
+
+  const create4ColTable = (rows: TableRow[], widths: [number, number, number, number]) => new Table({
+    width: { size: FULL_WIDTH, type: WidthType.DXA },
+    columnWidths: widths,
+    borders: noBorders,
+    rows,
+  });
+
+  const createSectionHeader = (text: string) => new Paragraph({
+    spacing: { before: 180, after: 80 },
+    children: [new TextRun({ text, bold: true, size: 20, font: "Arial" })],
+  });
 
   return [
     // ---- Header ----
@@ -282,82 +333,61 @@ function createDiaryChildren(diary: CaseDiary): any[] {
       children: [new TextRun({ text: "PT - CASE DIARY", bold: true, size: 22, font: "Arial" })],
     }),
 
-    // POLICE STATION / DISTRICT (no nesting)
-    new Table({
-      width: { size: FULL_WIDTH, type: WidthType.DXA },
-      borders: noBorders,
-      rows: [
-        gridPairRow("POLICE STATION  ", diary.policeStation, "DISTRICT ", diary.district, [1900, 3200, 1300, 2600]),
-      ],
-    }),
+    // Table 1: Police Station & District
+    create4ColTable([
+      gridPairRow("POLICE STATION  ", diary.policeStation, "DISTRICT ", diary.district, [1900, 3200, 1300, 2600])
+    ], [1900, 3200, 1300, 2600]),
 
-    new Paragraph({ spacing: { before: 100, after: 0 } }),
+    new Paragraph({ spacing: { before: 40, after: 40 } }),
 
-    // Primary metadata (no nesting)
-    twoColumnBorderlessTable([
-      gridRow("CR. NO. & SEC. OF LAW :", diary.crNoAndSecOfLaw),
+    // Table 2: Primary Metadata
+    create2ColTable([
+      crNoRow("CR. NO. & SEC. OF LAW :", diary.crNoAndSecOfLaw, diary.stageOfTheCase),
       gridRow("DATE, TIME & PLACE OF OCCURRENCE", diary.dateTimeAndPlaceOfOccurrence),
       gridRow("DATE OF CD", diary.dateOfCd),
       gridRow("I.DATE OF REPORT / TIME", diary.dateOfReportTime),
       gridRow("II.COMPLAINANT", diary.complainant),
     ]),
 
-    new Paragraph({ spacing: { before: 140, after: 0 } }),
-
-    // III. ACCUSED — Heading
-    new Paragraph({
-      spacing: { before: 100, after: 100 },
-      children: [new TextRun({ text: "III.ACCUSED", bold: true, size: 20, font: "Arial" })],
-    }),
-
-    // Accused Table (no nesting)
+    // Section 3: Accused
+    createSectionHeader("III.ACCUSED"),
     accusedTable,
 
-    new Paragraph({ spacing: { before: 140, after: 0 } }),
-
-    // IV. PROPERTY LOST DETAILS Header & Line
-    sectionHeaderWithBorder("IV.PROPERTY LOST DETAILS"),
-    
-    // IV. PROPERTY LOST DETAILS Value (Indented)
+    // Section 4: Property Lost
+    createSectionHeader("IV.PROPERTY LOST DETAILS"),
     new Paragraph({
       children: [normalText(diary.propertyLostDetails || "NIL")],
-      spacing: { before: 60, after: 120 },
+      spacing: { before: 40, after: 80 },
       indent: { left: 200 },
     }),
 
-    // V. RECOVERED PROPERTY DETAILS Header & Line
-    sectionHeaderWithBorder("V.RECOVERED PROPERTY DETAILS"),
-
-    // V. RECOVERED PROPERTY DETAILS Value (Indented)
+    // Section 5: Recovered Property
+    createSectionHeader("V.RECOVERED PROPERTY DETAILS"),
     new Paragraph({
       children: [normalText(diary.recoveredPropertyDetails || "NIL")],
-      spacing: { before: 60, after: 120 },
+      spacing: { before: 40, after: 80 },
       indent: { left: 200 },
     }),
 
-    new Paragraph({ spacing: { before: 100, after: 0 } }),
+    new Paragraph({ spacing: { before: 40, after: 40 } }),
 
-    // VI / VII Table (no nesting)
-    twoColumnBorderlessTable([
+    // Table 6: CD Dates & Case Stage
+    create2ColTable([
       gridRow("VI.DATE OF PREVIOUS CASE DIARY", diary.dateOfPreviousCaseDiary),
       gridRow("VII.STAGE OF THE CASE", diary.stageOfTheCase),
     ]),
 
-    new Paragraph({ spacing: { before: 100, after: 0 } }),
+    new Paragraph({ spacing: { before: 40, after: 40 } }),
 
-    // COURT REF. NO. / HEARING NO. Table (no nesting)
-    new Table({
-      width: { size: FULL_WIDTH, type: WidthType.DXA },
-      borders: noBorders,
-      rows: [
-        gridPairRow("COURT REF. NO.  ", diary.courtRefNo, "HEARING NO.  ", diary.hearingNo, [1900, 2700, 1700, 2700]),
-      ],
-    }),
+    // Table 7: Court Reference (4 columns)
+    create4ColTable([
+      gridPairRow("COURT REF. NO.  ", diary.courtRefNo, "HEARING NO.  ", diary.hearingNo, [1900, 2700, 1700, 2700])
+    ], [1900, 2700, 1700, 2700]),
 
-    new Paragraph({ spacing: { before: 100, after: 0 } }),
+    new Paragraph({ spacing: { before: 40, after: 40 } }),
 
-    // Court stats & attendance Table (no nesting)
-    twoColumnBorderlessTable([
+    // Table 8: Court Stats & Attendance
+    create2ColTable([
       gridRow("COURT NAME AND PLACE", diary.courtNameAndPlace),
       gridRow("WHETHER MAGISTRATE PRESENT ?", diary.whetherMagistratePresent),
       gridRow("WHETHER APP / PP PRESENT ?", diary.whetherAppPpPresent),
@@ -371,29 +401,22 @@ function createDiaryChildren(diary: CaseDiary): any[] {
       gridRow("NO. OF ACCUSED ABSENT", diary.noOfAccusedAbsent),
     ]),
 
-    new Paragraph({ spacing: { before: 160, after: 0 } }),
-
-    // REMARKS Heading
-    new Paragraph({
-      spacing: { before: 100, after: 100 },
-      children: [new TextRun({ text: "REMARKS", bold: true, size: 20, font: "Arial" })],
-    }),
-
-    // Remarks content paragraphs (no nesting)
+    // Section 9: Remarks
+    createSectionHeader("REMARKS"),
     ...remarksParagraphs,
 
-    new Paragraph({ spacing: { before: 100, after: 0 } }),
+    new Paragraph({ spacing: { before: 40, after: 40 } }),
 
-    // Posted / Next Hearing / Attended By Table (no nesting)
-    twoColumnBorderlessTable([
+    // Table 10: Hearing Details
+    create2ColTable([
       gridRow("POSTED FOR", diary.postedFor),
       gridRow("NEXT HEARING DATE", diary.nextHearingDate),
       gridRow("ATTENDED BY", diary.attendedBy),
     ]),
 
-    new Paragraph({ spacing: { before: 280, after: 0 } }),
+    new Paragraph({ spacing: { before: 180, after: 180 } }),
 
-    // SHO Signature — right aligned, full width
+    // SHO Signature
     new Paragraph({
       alignment: AlignmentType.RIGHT,
       spacing: { before: 100, after: 40 },
