@@ -709,7 +709,10 @@ export default function App() {
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
           const responseText = await response.text();
-          throw new Error(`Expected JSON response from formatting endpoint, but received: ${responseText.substring(0, 200)}`);
+          if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
+            throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
+          }
+          throw new Error(`Expected JSON response from formatting endpoint, but received content-type "${contentType}" with body: ${responseText.substring(0, 200)}`);
         }
 
         result = await response.json();

@@ -25,6 +25,34 @@ const upload = multerFn({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Helper utility to safely parse JSON returned from Gemini APIs that might contain invalid escapes (e.g. unescaped backslashes like \s or \A)
+function parseRobustJson(str: string) {
+  let cleaned = str.trim();
+  if (cleaned.startsWith('```json')) {
+    cleaned = cleaned.substring(7);
+  } else if (cleaned.startsWith('```')) {
+    cleaned = cleaned.substring(3);
+  }
+  if (cleaned.endsWith('```')) {
+    cleaned = cleaned.substring(0, cleaned.length - 3);
+  }
+  cleaned = cleaned.trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (initialErr) {
+    console.warn('Initial JSON parse failed, attempting backslash/control-character sanitization...', initialErr);
+    // Replace backslashes not followed by a valid JSON escape code
+    const fixed = cleaned.replace(/\\(?!["\\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
+    try {
+      return JSON.parse(fixed);
+    } catch (secondErr: any) {
+      console.error('Robust JSON parse failed on second attempt:', secondErr);
+      throw secondErr;
+    }
+  }
+}
+
 // API: Parse / Extract PDF details using Gemini 2.5 Flash
 app.post('/api/extract', upload.single('file'), async (req, res) => {
   try {
@@ -173,7 +201,7 @@ Ensure that you:
         }
 
         // Try parsing the response directly
-        extractedData = JSON.parse(responseText.trim());
+        extractedData = parseRobustJson(responseText);
         console.log(`Successfully extracted document contents using model: ${modelName}`);
         break; // Exit the loop on success
       } catch (err: any) {
@@ -414,7 +442,7 @@ Ensure that you:
           throw new Error('Gemini API returned an empty response.');
         }
 
-        extractedData = JSON.parse(responseText.trim());
+        extractedData = parseRobustJson(responseText);
         console.log(`Successfully structured document from text using model: ${modelName}`);
         break;
       } catch (err: any) {
