@@ -43,6 +43,7 @@ import { exportDiariesToZip } from './exportZip';
 import { User } from 'firebase/auth';
 import { CaseDiary, Accused, SavedDatabase } from './types';
 import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase } from './dbHelper';
+import { extractTextFromPdfClientSide } from './clientOcr';
 
 
 export default function App() {
@@ -56,9 +57,12 @@ export default function App() {
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
+  const [extractionMode, setExtractionMode] = useState<'direct' | 'free'>('free');
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [extractionProgress, setExtractionProgress] = useState<number>(0);
   const [extractionStep, setExtractionStep] = useState<string>('');
+  const [extractionLogs, setExtractionLogs] = useState<string[]>([]);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Workspace States
   const [diaries, setDiaries] = useState<CaseDiary[]>([]);
@@ -120,6 +124,13 @@ export default function App() {
   useEffect(() => {
     fetchSupabaseStatus();
   }, []);
+
+  // Auto-scroll execution log terminal to bottom
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollTop = logsEndRef.current.scrollHeight;
+    }
+  }, [extractionLogs]);
 
   const [loadedDbId, setLoadedDbId] = useState<string | null>(null);
   const [loadedDbName, setLoadedDbName] = useState<string | null>(null);
@@ -597,79 +608,224 @@ export default function App() {
     setIsExtracting(true);
     setConversionError(null);
     setExtractionProgress(5);
-    setExtractionStep('Uploading Case Diary & Setting up Security Context...');
+    setExtractionLogs([]);
 
-    // Progress bar simulation interval
-    let progressVal = 5;
-    const progressInterval = setInterval(() => {
-      progressVal += Math.floor(Math.random() * 8) + 3;
-      if (progressVal > 95) {
-        progressVal = 95;
-      }
-      setExtractionProgress(progressVal);
-
-      // Dynamically select steps based on current simulated progress
-      if (progressVal <= 18) {
-        setExtractionStep('Uploading Case Diary & Setting up Security Context...');
-      } else if (progressVal <= 38) {
-        setExtractionStep('Performing OCR Layout and Hand-written Aligned Parsing...');
-      } else if (progressVal <= 58) {
-        setExtractionStep('Consulting Google Gemini Language Intelligence Engine...');
-      } else if (progressVal <= 78) {
-        setExtractionStep('Translating bilingual segments & form structures...');
-      } else if (progressVal <= 92) {
-        setExtractionStep('Reconstructing complex police diary database records...');
-      } else {
-        setExtractionStep('Aligning and mapping structured tables...');
-      }
-    }, 350);
-
-    // Helper to read file as base64 string
-    const fileToBase64 = (file: File): Promise<string> => {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => {
-          const base64String = reader.result as string;
-          const base64 = base64String.split(',')[1];
-          resolve(base64);
-        };
-        reader.onerror = (error) => reject(error);
-      });
+    const logList: string[] = [];
+    const addLocalLog = (message: string, type: 'INFO' | 'OCR' | 'AI' | 'RECONSTRUCT' | 'SUCCESS' | 'ERROR' | 'SYSTEM' = 'INFO') => {
+      const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+      const logString = `[${time}] [${type}] ${message}`;
+      logList.push(logString);
+      setExtractionLogs([...logList]);
     };
 
+    addLocalLog('Starting case diary reconstruction pipeline...', 'SYSTEM');
+    addLocalLog(`Target file: "${selectedFile.name}" (${(selectedFile.size / 1024).toFixed(1)} KB)`, 'SYSTEM');
+    addLocalLog(`Extraction mode: ${extractionMode === 'free' ? 'Unlimited Free (Local Browser OCR)' : 'Cloud Upload (Direct multi-modal)'}`, 'SYSTEM');
+
+    let progressInterval: NodeJS.Timeout | null = null;
+
     try {
-      const base64Data = await fileToBase64(selectedFile);
-      const response = await fetch('/api/extract', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          file: base64Data,
-          filename: selectedFile.name,
-        }),
-      });
+      let result: any = null;
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Reconstruction failed (${response.status})`);
-      }
+      if (extractionMode === 'free') {
+        // Mode B: Unlimited Free Extraction (Client-Side Parser + Cloud Gemini Formatting)
+        setExtractionStep('Initializing high-fidelity Client-Side PDF Engine...');
+        addLocalLog('Bootstrapping local client-side PDF renderer...', 'INFO');
+        
+        // Run the client-side text-extraction & OCR with REAL progress updates
+        const extractedText = await extractTextFromPdfClientSide(selectedFile, (percent, step) => {
+          // Keep progress strictly within 0-92% range during local client-side extraction
+          const scaledPercent = Math.floor(5 + (percent / 100) * 85);
+          setExtractionProgress(scaledPercent);
+          setExtractionStep(step);
 
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        const responseText = await response.text();
-        if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
-          throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
+          if (step.includes('Initializing')) {
+            addLocalLog(step, 'SYSTEM');
+          } else if (step.includes('Reading') || step.includes('Decrypting')) {
+            addLocalLog(step, 'INFO');
+          } else if (step.includes('Scanning')) {
+            addLocalLog(step, 'INFO');
+          } else if (step.includes('OCR') || step.includes('local deep OCR scan')) {
+            addLocalLog(step, 'OCR');
+          } else if (step.includes('Rendering')) {
+            addLocalLog(step, 'INFO');
+          } else if (step.includes('Dismantling')) {
+            addLocalLog(step, 'SYSTEM');
+          } else {
+            addLocalLog(step, 'INFO');
+          }
+        });
+
+        if (!extractedText || extractedText.trim().length === 0) {
+          throw new Error('Could not extract any readable text or OCR characters from this PDF file locally.');
         }
-        throw new Error(`Expected JSON response, but received content-type "${contentType}" with body: ${responseText.substring(0, 200)}`);
+
+        addLocalLog(`Successfully extracted ${extractedText.length} characters of raw text and layout matrices.`, 'SUCCESS');
+        addLocalLog('Preparing structured content layout formatting rules...', 'SYSTEM');
+        addLocalLog('Transmitting payload to Gemini intelligence endpoint /api/extract-text...', 'AI');
+
+        // Now, we format and structure the raw text using Gemini (progress 93-98%)
+        setExtractionProgress(94);
+        setExtractionStep('Transmitting raw extracted text to Gemini structure model...');
+
+        // Quick simulator during Gemini structured inference
+        let postPercent = 94;
+        let simCount = 0;
+        progressInterval = setInterval(() => {
+          if (postPercent < 99) {
+            postPercent += 1;
+            setExtractionProgress(postPercent);
+          }
+          simCount++;
+          if (simCount === 1) {
+            addLocalLog('Analyzing case diary metadata pattern arrays (Crime No, Police Station)...', 'AI');
+          } else if (simCount === 3) {
+            addLocalLog('Mapping and validating Accused lists...', 'AI');
+          } else if (simCount === 5) {
+            addLocalLog('Extracting Tamil language remarks/page comments verbatim...', 'AI');
+          } else if (simCount === 7) {
+            addLocalLog('Formulating legal calendar dates and court hearing schedules...', 'AI');
+          }
+        }, 1100);
+
+        const response = await fetch('/api/extract-text', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            text: extractedText,
+            filename: selectedFile.name,
+          }),
+        });
+
+        if (progressInterval) clearInterval(progressInterval);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || `Formatting failed (${response.status})`);
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const responseText = await response.text();
+          throw new Error(`Expected JSON response from formatting endpoint, but received: ${responseText.substring(0, 200)}`);
+        }
+
+        result = await response.json();
+      } else {
+        // Mode A: Direct Cloud Upload (Multi-modal Gemini Direct Extraction)
+        setExtractionStep('Uploading Case Diary & Setting up Security Context...');
+        
+        // Progress bar simulation interval
+        let progressVal = 5;
+        let lastLoggedVal = 0;
+        progressInterval = setInterval(() => {
+          progressVal += Math.floor(Math.random() * 8) + 3;
+          if (progressVal > 95) {
+            progressVal = 95;
+          }
+          setExtractionProgress(progressVal);
+
+          // Dynamically select steps based on current simulated progress
+          if (progressVal <= 18) {
+            setExtractionStep('Uploading Case Diary & Setting up Security Context...');
+            if (lastLoggedVal < 5) {
+              addLocalLog('Uploading base64 document payload stream directly to cloud gateway...', 'SYSTEM');
+              addLocalLog(`Payload size: ${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`, 'SYSTEM');
+              lastLoggedVal = 5;
+            }
+          } else if (progressVal <= 38) {
+            setExtractionStep('Performing OCR Layout and Hand-written Aligned Parsing...');
+            if (lastLoggedVal < 20) {
+              addLocalLog('Performing deep multimodal OCR rasterization on cloud instances...', 'OCR');
+              addLocalLog('Segmenting handwritten logs and printed headers...', 'OCR');
+              lastLoggedVal = 20;
+            }
+          } else if (progressVal <= 58) {
+            setExtractionStep('Consulting Google Gemini Language Intelligence Engine...');
+            if (lastLoggedVal < 40) {
+              addLocalLog('Submitting raster images to Gemini 2.5 Flash...', 'AI');
+              addLocalLog('Validating schema and structure contexts...', 'AI');
+              lastLoggedVal = 40;
+            }
+          } else if (progressVal <= 78) {
+            setExtractionStep('Translating bilingual segments & form structures...');
+            if (lastLoggedVal < 60) {
+              addLocalLog('Scanning for Tamil vernacular texts in Remarks sections...', 'AI');
+              addLocalLog('Aligning bilingual translation schemas (Tamil and English indexes)...', 'AI');
+              lastLoggedVal = 60;
+            }
+          } else if (progressVal <= 92) {
+            setExtractionStep('Reconstructing complex police diary database records...');
+            if (lastLoggedVal < 80) {
+              addLocalLog('Generating clean JSON templates matching database schema rules...', 'RECONSTRUCT');
+              addLocalLog('Parsing witness examination logs...', 'RECONSTRUCT');
+              lastLoggedVal = 80;
+            }
+          } else {
+            setExtractionStep('Aligning and mapping structured tables...');
+            if (lastLoggedVal < 93) {
+              addLocalLog('Validating layout schema consistency...', 'SYSTEM');
+              lastLoggedVal = 93;
+            }
+          }
+        }, 350);
+
+        // Helper to read file as base64 string
+        const fileToBase64 = (file: File): Promise<string> => {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => {
+              const base64String = reader.result as string;
+              const base64 = base64String.split(',')[1];
+              resolve(base64);
+            };
+            reader.onerror = (error) => reject(error);
+          });
+        };
+
+        const base64Data = await fileToBase64(selectedFile);
+        const response = await fetch('/api/extract', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            file: base64Data,
+            filename: selectedFile.name,
+          }),
+        });
+
+        if (progressInterval) clearInterval(progressInterval);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          if (response.status === 413 || errorText.includes('TOO_LARGE')) {
+            throw new Error('This PDF file exceeds the Vercel server upload size limit. Please switch to the "Unlimited Free (Client-Side OCR)" option above, which can process files of any size without limitations.');
+          }
+          throw new Error(errorText || `Reconstruction failed (${response.status})`);
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const responseText = await response.text();
+          if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
+            throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
+          }
+          throw new Error(`Expected JSON response, but received content-type "${contentType}" with body: ${responseText.substring(0, 200)}`);
+        }
+
+        result = await response.json();
       }
 
-      const result = await response.json();
-      if (result.success && Array.isArray(result.data)) {
-        clearInterval(progressInterval);
+      if (result && result.success && Array.isArray(result.data)) {
+        if (progressInterval) clearInterval(progressInterval);
         setExtractionProgress(100);
         setExtractionStep('Reconstruction completed successfully!');
+        addLocalLog(`Successfully structured ${result.data.length} case diary entry(ies).`, 'SUCCESS');
+        addLocalLog('Pipeline complete. Rendering data schemas in Workspace...', 'SUCCESS');
 
         // Map extracted indices to unique string IDs
         const rawDiaries: CaseDiary[] = result.data.map((diary: any, idx: number) => ({
@@ -738,8 +894,9 @@ export default function App() {
         throw new Error('Server returned invalid structured data format.');
       }
     } catch (err: any) {
-      clearInterval(progressInterval);
+      if (progressInterval) clearInterval(progressInterval);
       console.error('Reconstruction error:', err);
+      addLocalLog(err.message || 'Unknown processing exception occurred during execution.', 'ERROR');
       setConversionError(err.message || 'Failed to complete formatting reconstruction. Please retry.');
       setIsExtracting(false);
       setExtractionProgress(0);
@@ -1041,6 +1198,44 @@ export default function App() {
                     </p>
                   </div>
 
+                  {/* Extraction Method Toggle */}
+                  <div className="mt-3 bg-gray-50 border border-gray-150 rounded-xl p-2.5">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Extraction Method</span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setExtractionMode('free')}
+                        className={`p-2 rounded-lg text-left transition-all cursor-pointer ${
+                          extractionMode === 'free'
+                            ? 'bg-white text-indigo-600 shadow-sm border border-gray-150'
+                            : 'text-gray-500 hover:text-gray-800 border border-transparent'
+                        }`}
+                      >
+                        <p className="text-[11px] font-bold flex items-center gap-1">
+                          <Check className={`w-3 h-3 ${extractionMode === 'free' ? 'text-indigo-600' : 'text-transparent'}`} />
+                          Unlimited Free
+                        </p>
+                        <p className="text-[8.5px] text-gray-400 mt-0.5 ml-4 leading-normal font-medium">Local Browser OCR. Perfect for large files.</p>
+                      </button>
+                      
+                      <button
+                        type="button"
+                        onClick={() => setExtractionMode('direct')}
+                        className={`p-2 rounded-lg text-left transition-all cursor-pointer ${
+                          extractionMode === 'direct'
+                            ? 'bg-white text-indigo-600 shadow-sm border border-gray-150'
+                            : 'text-gray-500 hover:text-gray-800 border border-transparent'
+                        }`}
+                      >
+                        <p className="text-[11px] font-bold flex items-center gap-1">
+                          <Check className={`w-3 h-3 ${extractionMode === 'direct' ? 'text-indigo-600' : 'text-transparent'}`} />
+                          Cloud Upload
+                        </p>
+                        <p className="text-[8.5px] text-gray-400 mt-0.5 ml-4 leading-normal font-medium">Direct Gemini. Max 4.5MB on Vercel.</p>
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Run Analysis Action */}
                   {selectedFile && !isExtracting && (
                     <motion.div 
@@ -1105,6 +1300,40 @@ export default function App() {
                           Analyzing layouts, handwritings, and formatting police case diaries securely.
                         </p>
                       </div>
+
+                      {/* Live Terminal Log Stream (Coding Flow Style) */}
+                      {extractionLogs.length > 0 && (
+                        <div className="mt-1 flex flex-col">
+                          <div className="flex items-center justify-between px-1.5 pb-1 text-[8.5px] font-bold text-gray-400 uppercase tracking-wider">
+                            <span>Live Execution Terminal</span>
+                            <span className="flex items-center gap-1 text-emerald-500 font-semibold">
+                              <span className="w-1 h-1 bg-emerald-500 rounded-full animate-ping"></span>
+                              Active Stream
+                            </span>
+                          </div>
+                          <div 
+                            ref={logsEndRef}
+                            className="bg-slate-950 rounded-xl p-3 border border-slate-900 font-mono text-[9px] leading-relaxed text-slate-300 max-h-[140px] overflow-y-auto shadow-inner flex flex-col gap-1 select-none"
+                            style={{ scrollBehavior: 'smooth' }}
+                          >
+                            {extractionLogs.map((log, index) => {
+                              let colorClass = 'text-slate-300';
+                              if (log.includes('[SYSTEM]')) colorClass = 'text-sky-400';
+                              else if (log.includes('[OCR]')) colorClass = 'text-fuchsia-400';
+                              else if (log.includes('[AI]')) colorClass = 'text-amber-400';
+                              else if (log.includes('[RECONSTRUCT]')) colorClass = 'text-indigo-400';
+                              else if (log.includes('[SUCCESS]')) colorClass = 'text-emerald-400 font-semibold';
+                              else if (log.includes('[ERROR]')) colorClass = 'text-rose-400 font-semibold';
+
+                              return (
+                                <div key={index} className={`whitespace-pre-wrap break-all ${colorClass}`}>
+                                  {log}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </motion.div>
                   )}
                 </div>

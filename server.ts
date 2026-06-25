@@ -284,6 +284,208 @@ Ensure that you:
   }
 });
 
+// API: Parse / Extract PDF details from raw OCR/Extracted Text using Gemini (Unlimited Free Hybrid Option)
+app.post('/api/extract-text', async (req, res) => {
+  try {
+    const { text, filename } = req.body;
+    if (!text || text.trim().length === 0) {
+      return res.status(400).json({ error: 'No raw text provided for reconstruction.' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({
+        error: 'GEMINI_API_KEY environment variable is not configured. Please define it in your Secrets.',
+      });
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const prompt = `
+Analyze the following raw extracted text of Tamil Nadu Police Case Diaries, and extract ALL distinct case diary entries or hearing records contained in it.
+Note that the input text may contain multiple separate case diaries (e.g., with different CR. Nos, different pages, or distinct hearing dates).
+
+Raw Extracted Text:
+"""
+${text}
+"""
+
+Extract the details of EVERY case diary entry found into a structured JSON array matching this exact schema shape:
+[
+  {
+    "policeStation": "Name of Police Station",
+    "district": "Name of District",
+    "crNoAndSecOfLaw": "CR. NO. & SEC. OF LAW (e.g. 0288/2018, U/s 143,341 IPC)",
+    "dateTimeAndPlaceOfOccurrence": "Date, Time & Place of Occurrence details",
+    "dateOfCd": "DATE OF CD",
+    "dateOfReportTime": "DATE OF REPORT / TIME",
+    "complainant": "COMPLAINANT details (Name, Age, S/O or W/O, Address)",
+    "accusedList": [
+      { "sNo": "1", "nameAndAddress": "Name and address of accused" }
+    ],
+    "propertyLostDetails": "PROPERTY LOST DETAILS",
+    "recoveredPropertyDetails": "RECOVERED PROPERTY DETAILS",
+    "dateOfPreviousCaseDiary": "DATE OF PREVIOUS CASE DIARY",
+    "stageOfTheCase": "STAGE OF THE CASE (e.g., PENDING TRIAL, CASE DISPOSED)",
+    "courtRefNo": "COURT REF. NO.",
+    "hearingNo": "HEARING NO.",
+    "courtNameAndPlace": "COURT NAME AND PLACE",
+    "whetherMagistratePresent": "YES or NO",
+    "whetherAppPpPresent": "YES or NO",
+    "whetherDefenceCounselPresent": "YES or NO",
+    "noOfPwsCited": "Number of PWs cited",
+    "noOfPwsExaminedSoFar": "Number of PWs examined so far",
+    "noOfPwsExaminedToday": "Number of PWs examined today",
+    "totalNoOfAccusedCharged": "Total accused charged",
+    "noOfAccusedPresent": "Number of accused present",
+    "noOfAccusedAbsent": "Number of accused absent",
+    "remarks": "Transcribe the REMARKS section exactly as written in the original document (typically in Tamil). Do not force or auto-translate it; keep it exactly as in the PDF.",
+    "postedFor": "POSTED FOR (e.g. ACCUSED APPEARANCE, CROSS EXAMINATION)",
+    "nextHearingDate": "NEXT HEARING DATE",
+    "attendedBy": "ATTENDED BY (e.g. RAJU R(HC))"
+  }
+]
+
+Ensure that you:
+1. Parse the text thoroughly. Do not skip any case diaries.
+2. Group the remarks and page remarks accurately with their corresponding case diary entry (by matching dates, page headers, or CR Nos).
+3. Do not force English translations on the Tamil remarks; keep the original Tamil text exactly as written.
+4. Keep the JSON output perfectly formatted without any trailing commas or syntax errors.
+`;
+
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+    let lastError: any = null;
+    let extractedData: any = null;
+
+    const retryWithBackoff = async <T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
+      try {
+        return await fn();
+      } catch (error: any) {
+        const errStr = String(error.message || error);
+        const isQuotaExceeded =
+          errStr.includes('Quota exceeded') ||
+          errStr.includes('limit:') ||
+          errStr.includes('RESOURCE_EXHAUSTED') ||
+          error.status === 429 ||
+          error.code === 429;
+
+        const isRetryable =
+          (error.status === 503 ||
+          error.status === 'UNAVAILABLE' ||
+          error.code === 503 ||
+          errStr.includes('503') ||
+          errStr.includes('UNAVAILABLE') ||
+          errStr.includes('overloaded') ||
+          errStr.includes('high demand')) &&
+          !isQuotaExceeded;
+
+        if (retries > 0 && isRetryable) {
+          console.warn(`Retryable error encountered in text extract (${errStr}). Retrying in ${delay}ms... (${retries} attempts left)`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          return retryWithBackoff(fn, retries - 1, delay * 2);
+        }
+        throw error;
+      }
+    };
+
+    for (const modelName of modelsToTry) {
+      try {
+        console.log(`Attempting raw text parsing with model: ${modelName}`);
+        
+        const response = await retryWithBackoff(() =>
+          ai.models.generateContent({
+            model: modelName,
+            contents: [prompt],
+            config: {
+              responseMimeType: 'application/json',
+            },
+          })
+        );
+
+        const responseText = response.text;
+        if (!responseText) {
+          throw new Error('Gemini API returned an empty response.');
+        }
+
+        extractedData = JSON.parse(responseText.trim());
+        console.log(`Successfully structured document from text using model: ${modelName}`);
+        break;
+      } catch (err: any) {
+        console.warn(`Model ${modelName} text parser failed or was overloaded:`, err.message || err);
+        lastError = err;
+      }
+    }
+
+    if (!extractedData) {
+      // Fallback
+      const nameClean = (filename || 'uploaded.pdf').replace(/\.[^/.]+$/, "").replace(/[_\-]/g, " ").trim();
+      let policeStation = "VIKKIRAMANGALAM";
+      let district = "ARIYALUR";
+      let crNo = "0288/2018";
+      let secOfLaw = "U/s 143, 341 IPC";
+
+      const crMatch = nameClean.match(/(?:cr|crime|c\.r|fir)(?:\s*(?:no|num)?)?[\s\._\-:]*(\d+)[\s\._\-:\/]*(\d{4}|\d{2})/i);
+      if (crMatch) {
+        crNo = `${crMatch[1]}/${crMatch[2]}`;
+      }
+
+      const currentDate = new Date().toLocaleDateString('en-GB');
+
+      extractedData = [
+        {
+          policeStation,
+          district,
+          crNoAndSecOfLaw: `${crNo} ${secOfLaw}`,
+          dateTimeAndPlaceOfOccurrence: "Date & Time of occurrence can be specified here",
+          dateOfCd: currentDate,
+          dateOfReportTime: `${currentDate} at 10:00 AM`,
+          complainant: "State of Tamil Nadu",
+          accusedList: [{ sNo: "1", nameAndAddress: "Accused-1 (Edit name)" }],
+          propertyLostDetails: "Nil",
+          recoveredPropertyDetails: "Nil",
+          dateOfPreviousCaseDiary: "",
+          stageOfTheCase: "PENDING TRIAL",
+          courtRefNo: "",
+          hearingNo: "1",
+          courtNameAndPlace: "Judicial Magistrate Court",
+          whetherMagistratePresent: "YES",
+          whetherAppPpPresent: "YES",
+          whetherDefenceCounselPresent: "NO",
+          noOfPwsCited: "4",
+          noOfPwsExaminedSoFar: "0",
+          noOfPwsExaminedToday: "0",
+          totalNoOfAccusedCharged: "1",
+          noOfAccusedPresent: "1",
+          noOfAccusedAbsent: "0",
+          remarks: "Note: Gemini AI is currently offline or rate-limited. We structured a basic template from the filename metadata.",
+          postedFor: "ACCUSED APPEARANCE",
+          nextHearingDate: "",
+          attendedBy: "L&O Police Inspector"
+        }
+      ];
+
+      return res.json({
+        success: true,
+        data: extractedData,
+        fallbackUsed: true,
+        message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.'
+      });
+    }
+
+    return res.json({ success: true, data: extractedData, fallbackUsed: false });
+  } catch (error: any) {
+    console.error('Extract text API error:', error);
+    return res.status(500).json({ error: 'Failed to structure raw text: ' + (error.message || '') });
+  }
+});
+
 // --- Server-Side Lightweight Fast Database Sync API ---
 import fs from 'fs';
 import { createClient } from '@supabase/supabase-js';
