@@ -86,18 +86,32 @@ export default function App() {
   } | null>(null);
   const [isLoadingSupaStatus, setIsLoadingSupaStatus] = useState<boolean>(false);
 
-  const fetchSupabaseStatus = async () => {
+  const fetchSupabaseStatus = async (retryCount = 0) => {
     setIsLoadingSupaStatus(true);
     try {
       const res = await fetch('/api/db/status');
       if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          setSupabaseStatus(data);
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data.success) {
+            setSupabaseStatus(data);
+          }
+        } else {
+          console.warn('Expected JSON response for database status, but received non-JSON:', contentType);
         }
+      } else {
+        console.warn(`Server status endpoint returned non-ok status: ${res.status}`);
       }
     } catch (err) {
-      console.error('Error fetching Supabase status:', err);
+      console.warn(`Attempt ${retryCount + 1} to fetch Supabase status failed:`, err);
+      if (retryCount < 3) {
+        setTimeout(() => {
+          fetchSupabaseStatus(retryCount + 1);
+        }, 1500);
+      } else {
+        console.error('Max retries reached. Error fetching Supabase status:', err);
+      }
     } finally {
       setIsLoadingSupaStatus(false);
     }
@@ -640,6 +654,15 @@ export default function App() {
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(errorText || `Reconstruction failed (${response.status})`);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const responseText = await response.text();
+        if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
+          throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
+        }
+        throw new Error(`Expected JSON response, but received content-type "${contentType}" with body: ${responseText.substring(0, 200)}`);
       }
 
       const result = await response.json();
