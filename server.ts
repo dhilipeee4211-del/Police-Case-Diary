@@ -1,7 +1,10 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import multer from 'multer';
 import { GoogleGenAI } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -514,9 +517,6 @@ Ensure that you:
 });
 
 // --- Server-Side Lightweight Fast Database Sync API ---
-import fs from 'fs';
-import os from 'os';
-import { createClient } from '@supabase/supabase-js';
 
 const DATA_DIR = process.env.VERCEL 
   ? path.join(os.tmpdir(), 'police-case-diary-data')
