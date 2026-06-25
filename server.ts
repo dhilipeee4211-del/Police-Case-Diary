@@ -523,14 +523,21 @@ const DATA_DIR = process.env.VERCEL
   : path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'databases.json');
 
-// Ensure the data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// Ensure the data directory exists lazily to prevent tracing errors in serverless environments
+function ensureDataDirExists() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.error('Failed to create DATA_DIR:', err);
+  }
 }
 
 // Helper to read server databases from disk
 function readServerDatabases(): any[] {
   try {
+    ensureDataDirExists();
     if (!fs.existsSync(DB_FILE)) {
       return [];
     }
@@ -545,6 +552,7 @@ function readServerDatabases(): any[] {
 // Helper to write server databases to disk
 function writeServerDatabases(databases: any[]): void {
   try {
+    ensureDataDirExists();
     fs.writeFileSync(DB_FILE, JSON.stringify(databases, null, 2), 'utf8');
   } catch (err) {
     console.error('Error writing server databases.json:', err);
