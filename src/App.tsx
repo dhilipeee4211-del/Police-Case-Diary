@@ -3333,9 +3333,9 @@ export default function App() {
                               ← Back to Case List
                             </button>
 
-                            {/* Database Save Status Feedback Notification */}
+                            {/* Database Save Status Feedback Notification - desktop only */}
                             {saveDbStatus.message && (
-                              <div className={`mb-4 p-4 border rounded-2xl flex items-center gap-2.5 text-xs font-semibold shadow-xs ${
+                              <div className={`hidden lg:flex mb-4 p-4 border rounded-2xl items-center gap-2.5 text-xs font-semibold shadow-xs ${
                                 saveDbStatus.type === 'success' 
                                   ? 'bg-green-50 border-green-100 text-green-700' 
                                   : saveDbStatus.type === 'error'
@@ -3353,8 +3353,8 @@ export default function App() {
                               </div>
                             )}
 
-                            {/* Workspace Header Actions */}
-                            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b" style={{ borderColor: 'var(--th-border)' }}>
+                            {/* Workspace Header Actions - desktop only */}
+                            <div className="hidden lg:flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b" style={{ borderColor: 'var(--th-border)' }}>
                               <div>
                                 <div className="flex items-center gap-2">
                                   <span className="px-2 py-0.5 bg-green-50 text-green-700 text-[10px] font-bold rounded-md border border-green-200/50">VERIFIED PREVIEW</span>
@@ -3426,7 +3426,7 @@ export default function App() {
                             </div>
 
                             {/* Interactive Case Diary Document Form */}
-                            <div className="space-y-6 mt-6 max-h-[680px] overflow-y-auto pr-1">
+                            <div className="space-y-6 lg:mt-6 max-h-[680px] overflow-y-auto pr-1">
                               {/* Section 1: Headers */}
                               <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                                 <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>I. Administration & Registry</h4>
