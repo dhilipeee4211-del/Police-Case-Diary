@@ -35,7 +35,9 @@ import {
   MicOff,
   Edit3,
   Shield,
-  Activity
+  Activity,
+  Play,
+  Pause
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initAuth, googleSignIn, logout } from './firebase';
@@ -47,17 +49,22 @@ import { CaseDiary, Accused, SavedDatabase } from './types';
 import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase } from './dbHelper';
 import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
 
-// Custom User Role Checker mapping
+const ALLOWED_EMAILS = [
+  'dhilipeee4211@gmail.com',
+  'dhileepank2@gmail.com',
+  'kgrraju4628@gmail.com'
+];
+
 const getUserRole = (email?: string | null) => {
-  if (!email) return { name: 'Offline Guest Officer', badge: 'Guest', level: 'guest', color: 'gray' };
+  if (!email) return { name: 'Guest User', badge: 'Guest', level: 'guest', color: 'gray' };
   const lowerEmail = email.toLowerCase().trim();
   if (lowerEmail === 'dhilipeee4211@gmail.com') {
-    return { name: 'Superintendent of Police', badge: 'SP (Admin)', level: 'admin', color: 'gold' };
+    return { name: 'Administrator', badge: 'Admin', level: 'admin', color: 'gold' };
   }
   if (lowerEmail === 'dhileepank2@gmail.com' || lowerEmail === 'kgrraju4628@gmail.com') {
-    return { name: 'Investigating Officer', badge: 'Inspector', level: 'officer', color: 'blue' };
+    return { name: 'Regular User', badge: 'User', level: 'user', color: 'blue' };
   }
-  return { name: 'Officer / Guard', badge: 'Officer', level: 'officer', color: 'slate' };
+  return { name: 'Guest User', badge: 'Guest', level: 'guest', color: 'gray' };
 };
 
 // Outlined Material Input Component
@@ -163,6 +170,21 @@ export default function App() {
   const [extractionStep, setExtractionStep] = useState<string>('');
   const [extractionLogs, setExtractionLogs] = useState<string[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
+
+  // Pause/Resume & Custom Starting Page States
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+  const isPausedRef = useRef<boolean>(false);
+  const [startPageInput, setStartPageInput] = useState<number>(1);
+  const [currentExtractionQueue, setCurrentExtractionQueue] = useState<{
+    chunks: any[];
+    mode: 'free' | 'direct';
+    filename: string;
+    nextIndex: number;
+    chunkSize: number;
+    startPageOffset: number;
+  } | null>(null);
+  const [showWorkspaceSearch, setShowWorkspaceSearch] = useState<boolean>(false);
+  const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState<string>('');
 
   // Workspace States
   const [diaries, setDiaries] = useState<CaseDiary[]>([]);
@@ -329,78 +351,56 @@ export default function App() {
   const toggleRemarksVoiceTyping = () => toggleVoiceTyping('remarks');
 
 
-
   // Initialize Auth state on load
   useEffect(() => {
     const unsubscribe = initAuth(
       (currentUser, accessToken) => {
+        if (currentUser && currentUser.email) {
+          const lowerEmail = currentUser.email.toLowerCase().trim();
+          if (!ALLOWED_EMAILS.includes(lowerEmail)) {
+            setAuthError(`Access Denied: ${currentUser.email} is not authorized to access this workspace. Please contact the administrator.`);
+            logout();
+            setUser(null);
+            setToken(null);
+            setNeedsAuth(true);
+            return;
+          }
+        }
         setUser(currentUser);
         setToken(accessToken);
         setNeedsAuth(false);
       },
       () => {
-        const guestActive = localStorage.getItem("guest_session_active");
-        if (guestActive === "true") {
-          let guestId = localStorage.getItem("guest_user_id");
-          if (!guestId) {
-            guestId = 'guest-' + Date.now();
-            localStorage.setItem("guest_user_id", guestId);
-          }
-          setUser({
-            uid: guestId,
-            displayName: 'Guest Officer',
-            email: 'guest@station.local',
-            photoURL: null,
-          } as any);
-          setToken('guest-token');
-          setNeedsAuth(false);
-        } else {
-          setUser(null);
-          setToken(null);
-          setNeedsAuth(true);
-        }
+        setUser(null);
+        setToken(null);
+        setNeedsAuth(true);
       }
     );
     return () => unsubscribe();
   }, []);
-
-  const handleGuestAccess = () => {
-    let guestId = localStorage.getItem("guest_user_id");
-    if (!guestId) {
-      guestId = 'guest-' + Date.now();
-      localStorage.setItem("guest_user_id", guestId);
-    }
-    localStorage.setItem("guest_session_active", "true");
-    setUser({
-      uid: guestId,
-      displayName: 'Guest Officer',
-      email: 'guest@station.local',
-      photoURL: null,
-    } as any);
-    setToken('guest-token');
-    setNeedsAuth(false);
-  };
 
   const handleLogin = async () => {
     setIsLoggingIn(true);
     setAuthError(null);
     try {
       const result = await googleSignIn();
-      if (result) {
+      if (result && result.user && result.user.email) {
+        const lowerEmail = result.user.email.toLowerCase().trim();
+        if (!ALLOWED_EMAILS.includes(lowerEmail)) {
+          setAuthError(`Access Denied: ${result.user.email} is not authorized to access this workspace. Please contact the administrator.`);
+          await logout();
+          setUser(null);
+          setToken(null);
+          setNeedsAuth(true);
+          return;
+        }
         setUser(result.user);
         setToken(result.accessToken);
         setNeedsAuth(false);
       }
     } catch (err: any) {
       console.error('Login error:', err);
-      if (err.code === 'auth/popup-closed-by-user' || err.message?.includes('popup') || err.message?.includes('closed')) {
-        setAuthError('Google Sign-In popup was blocked or closed. Activating Offline Guest Mode so you can proceed immediately...');
-        setTimeout(() => {
-          handleGuestAccess();
-        }, 1500);
-      } else {
-        setAuthError(err.message || 'Failed to authenticate with Google. Please try again.');
-      }
+      setAuthError(err.message || 'Failed to authenticate with Google. Please try again.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -446,14 +446,33 @@ export default function App() {
 
   // Debounced Auto-Save back to Local / Server / Cloud Database when editing an active session
   useEffect(() => {
-    if (!user || !loadedDbId || isSaved || diaries.length === 0) return;
+    if (!user || isSaved || diaries.length === 0) return;
 
     const timer = setTimeout(async () => {
       try {
-        const saved = await saveSavedDatabase(loadedDbName || "Database", diaries, user.uid, loadedDbId);
-        setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
+        let currentDbId = loadedDbId;
+        let currentDbName = loadedDbName;
+
+        if (!currentDbId) {
+          // Auto-initialize a new database session
+          const firstDiary = diaries[0];
+          const crimeNo = (firstDiary.crNoAndSecOfLaw || 'Diary').split(',')[0].replace(/[\/\\?%*:|"<>]/g, '-').trim();
+          const station = firstDiary.policeStation || 'Record';
+          currentDbName = `Database - CR No ${crimeNo} - ${station}`;
+          currentDbId = `db-${Date.now()}`;
+
+          setLoadedDbId(currentDbId);
+          setLoadedDbName(currentDbName);
+          setDbNameInput(currentDbName);
+        }
+
+        const saved = await saveSavedDatabase(currentDbName || "Database", diaries, user.uid, currentDbId);
+        setSavedDatabases((prev) => {
+          const filtered = prev.filter(db => db.id !== saved.id);
+          return [saved, ...filtered];
+        });
         setIsSaved(true);
-        console.log("Background Auto-Save successful for database:", loadedDbId);
+        console.log("Background Auto-Save successful for database:", saved.id);
       } catch (err) {
         console.error("Background Auto-Save failed:", err);
       }
@@ -692,6 +711,7 @@ export default function App() {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         setSelectedFile(file);
         setConversionError(null);
+        setActiveTab('editor');
       } else {
         setConversionError('Please upload a valid PDF document.');
       }
@@ -704,6 +724,7 @@ export default function App() {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         setSelectedFile(file);
         setConversionError(null);
+        setActiveTab('editor');
       } else {
         setConversionError('Please upload a valid PDF document.');
       }
@@ -714,33 +735,230 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
-  // Run AI layout extraction and reconstruction with an animated progress loading bar
+  const addLocalLog = (message: string, type: 'INFO' | 'OCR' | 'AI' | 'RECONSTRUCT' | 'SUCCESS' | 'ERROR' | 'SYSTEM' = 'INFO') => {
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const logString = `[${time}] [${type}] ${message}`;
+    setExtractionLogs(prev => [...prev, logString]);
+  };
+
+  const appendChunkDiaries = (data: any[]) => {
+    const rawDiaries: CaseDiary[] = data.map((diary: any, idx: number) => ({
+      ...diary,
+      id: `${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
+      policeStation: diary.policeStation || 'VIKKIRAMANGALAM',
+      district: diary.district || 'ARIYALUR',
+      crNoAndSecOfLaw: diary.crNoAndSecOfLaw || '0288/2018',
+      dateTimeAndPlaceOfOccurrence: diary.dateTimeAndPlaceOfOccurrence || '',
+      dateOfCd: diary.dateOfCd || '',
+      dateOfReportTime: diary.dateOfReportTime || '',
+      complainant: diary.complainant || '',
+      accusedList: Array.isArray(diary.accusedList) ? diary.accusedList : [],
+      propertyLostDetails: diary.propertyLostDetails || '',
+      recoveredPropertyDetails: diary.recoveredPropertyDetails || '',
+      dateOfPreviousCaseDiary: diary.dateOfPreviousCaseDiary || '',
+      stageOfTheCase: diary.stageOfTheCase || 'PENDING TRIAL',
+      courtRefNo: diary.courtRefNo || '',
+      hearingNo: diary.hearingNo || '',
+      courtNameAndPlace: diary.courtNameAndPlace || '',
+      whetherMagistratePresent: diary.whetherMagistratePresent || 'YES',
+      whetherAppPpPresent: diary.whetherAppPpPresent || 'YES',
+      whetherDefenceCounselPresent: diary.whetherDefenceCounselPresent || 'NO',
+      noOfPwsCited: diary.noOfPwsCited || '0',
+      noOfPwsExaminedSoFar: diary.noOfPwsExaminedSoFar || '0',
+      noOfPwsExaminedToday: diary.noOfPwsExaminedToday || '0',
+      totalNoOfAccusedCharged: diary.totalNoOfAccusedCharged || '0',
+      noOfAccusedPresent: diary.noOfAccusedPresent || '0',
+      noOfAccusedAbsent: diary.noOfAccusedAbsent || '0',
+      remarks: diary.remarks || '',
+      postedFor: diary.postedFor || '',
+      nextHearingDate: diary.nextHearingDate || '',
+      attendedBy: diary.attendedBy || '',
+    }));
+
+    setDiaries((prev) => {
+      const combined = [...prev, ...rawDiaries];
+      const seenKeys = new Set<string>();
+      const filtered: CaseDiary[] = [];
+      
+      combined.forEach((diary) => {
+        const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          filtered.push(diary);
+        }
+      });
+      
+      return filtered;
+    });
+    
+    setIsSaved(false);
+  };
+
+  const handlePause = () => {
+    isPausedRef.current = true;
+    setIsPaused(true);
+    addLocalLog('Reconstruction paused. You can resume later.', 'SYSTEM');
+  };
+
+  const handleResume = () => {
+    isPausedRef.current = false;
+    setIsPaused(false);
+    if (currentExtractionQueue) {
+      processQueue(currentExtractionQueue);
+    }
+  };
+
+  const processQueue = async (queue: {
+    chunks: any[];
+    mode: 'free' | 'direct';
+    filename: string;
+    nextIndex: number;
+    chunkSize: number;
+    startPageOffset: number;
+  }) => {
+    setIsExtracting(true);
+    setIsPaused(false);
+    isPausedRef.current = false;
+    setConversionError(null);
+
+    const { chunks, mode, filename, nextIndex, chunkSize, startPageOffset } = queue;
+
+    try {
+      for (let cIdx = nextIndex; cIdx < chunks.length; cIdx++) {
+        if (isPausedRef.current) {
+          setCurrentExtractionQueue({
+            chunks,
+            mode,
+            filename,
+            nextIndex: cIdx,
+            chunkSize,
+            startPageOffset
+          });
+          setIsExtracting(false);
+          return;
+        }
+
+        const chunk = chunks[cIdx];
+        const startPage = startPageOffset + cIdx * chunkSize + 1;
+        const endPage = startPageOffset + Math.min((cIdx + 1) * chunkSize, chunks.length * chunkSize);
+
+        const apiEndpoint = mode === 'free' ? '/api/extract-text' : '/api/extract';
+        const requestBody = mode === 'free' 
+          ? { text: chunk, filename }
+          : { file: chunk, filename: `batch-${cIdx + 1}.pdf` };
+
+        addLocalLog(`Processing batch ${cIdx + 1} of ${chunks.length} (Pages ${startPage} to ${endPage})...`, 'AI');
+        setExtractionStep(`Structuring batch ${cIdx + 1}/${chunks.length} (Pages ${startPage}-${endPage})...`);
+        
+        const baseProgress = Math.floor((cIdx / chunks.length) * 100);
+        setExtractionProgress(baseProgress);
+
+        let response: Response;
+        let retriesLeft = 4;
+        let delayMs = 3000;
+        
+        while (true) {
+          if (isPausedRef.current) {
+            setCurrentExtractionQueue({
+              chunks,
+              mode,
+              filename,
+              nextIndex: cIdx,
+              chunkSize,
+              startPageOffset
+            });
+            setIsExtracting(false);
+            return;
+          }
+
+          response = await fetch(apiEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+          });
+          
+          if (response.ok) {
+            break;
+          }
+          
+          const isRateLimited = response.status === 429;
+          const isServerError = response.status >= 500;
+          
+          if (retriesLeft > 0 && (isRateLimited || isServerError)) {
+            const reason = isRateLimited ? "Rate limit (429)" : `Server status (${response.status})`;
+            addLocalLog(`${reason} encountered. Retrying batch ${cIdx + 1} in ${delayMs / 1000}s... (${retriesLeft} retries left)`, 'SYSTEM');
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            retriesLeft--;
+            delayMs *= 2;
+          } else {
+            const errorText = await response.text();
+            throw new Error(errorText || `Extraction failed for batch ${cIdx + 1} (${response.status})`);
+          }
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const responseText = await response.text();
+          if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
+            throw new Error('The backend server returned HTML instead of JSON.');
+          }
+          throw new Error(`Expected JSON response, but received content-type "${contentType}" for batch ${cIdx + 1}`);
+        }
+
+        const chunkResult = await response.json();
+        if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
+          appendChunkDiaries(chunkResult.data);
+          addLocalLog(`Successfully structured batch ${cIdx + 1} of ${chunks.length}.`, 'SUCCESS');
+        } else {
+          throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
+        }
+
+        if (cIdx < chunks.length - 1) {
+          addLocalLog(`Pacing request flow... Waiting 2.5s before next batch...`, 'SYSTEM');
+          await new Promise(resolve => setTimeout(resolve, 2500));
+        }
+      }
+
+      setExtractionProgress(100);
+      setExtractionStep('Reconstruction completed successfully!');
+      addLocalLog('Pipeline complete. Rendering data schemas in Workspace...', 'SUCCESS');
+      setCurrentExtractionQueue(null);
+      setIsExtracting(false);
+    } catch (err: any) {
+      console.error('Queue processing error:', err);
+      addLocalLog(err.message || 'Unknown processing exception occurred.', 'ERROR');
+      setConversionError(err.message || 'Failed to complete formatting reconstruction. Please retry.');
+      setIsExtracting(false);
+      
+      setCurrentExtractionQueue({
+        chunks,
+        mode,
+        filename,
+        nextIndex: nextIndex,
+        chunkSize,
+        startPageOffset
+      });
+    }
+  };
+
   const runExtraction = async () => {
     if (!selectedFile) return;
 
     setIsExtracting(true);
+    setIsPaused(false);
+    isPausedRef.current = false;
     setConversionError(null);
     setExtractionProgress(5);
     setExtractionLogs([]);
 
-    const logList: string[] = [];
-    const addLocalLog = (message: string, type: 'INFO' | 'OCR' | 'AI' | 'RECONSTRUCT' | 'SUCCESS' | 'ERROR' | 'SYSTEM' = 'INFO') => {
-      const time = new Date().toLocaleTimeString('en-US', { hour12: false });
-      const logString = `[${time}] [${type}] ${message}`;
-      logList.push(logString);
-      setExtractionLogs([...logList]);
-    };
-
     addLocalLog('Starting case diary reconstruction pipeline...', 'SYSTEM');
     addLocalLog(`Target file: "${selectedFile.name}" (${(selectedFile.size / 1024).toFixed(1)} KB)`, 'SYSTEM');
     addLocalLog(`Extraction mode: ${extractionMode === 'free' ? 'Unlimited Free (Local Browser OCR)' : 'Cloud Upload (Direct multi-modal)'}`, 'SYSTEM');
-
-    let progressInterval: NodeJS.Timeout | null = null;
+    addLocalLog(`Start Page configuration: page ${startPageInput}`, 'SYSTEM');
 
     try {
-      let result: any = null;
-
-      // Pre-check page count client-side and guide the user
       let numPages = 0;
       try {
         const pdfjsLib = await loadPdfJs();
@@ -748,50 +966,28 @@ export default function App() {
         const pdf = await pdfjsLib.getDocument({ data: precheckBuffer }).promise;
         numPages = pdf.numPages;
         addLocalLog(`Verified PDF structure: ${numPages} page(s) found.`, 'SYSTEM');
-        if (numPages > 50) {
-          addLocalLog(`Note: Processing documents larger than 50 pages can take a few minutes due to rate-limit pacing. Please keep this tab open until reconstruction completes.`, 'SYSTEM');
-        }
       } catch (err: any) {
         console.warn("Failed to precheck page count client-side:", err);
       }
 
       if (extractionMode === 'free') {
-        // Mode B: Unlimited Free Extraction (Client-Side Parser + Cloud Gemini Formatting)
         setExtractionStep('Initializing high-fidelity Client-Side PDF Engine...');
         addLocalLog('Bootstrapping local client-side PDF renderer...', 'INFO');
         
-        // Run the client-side text-extraction & OCR with REAL progress updates
         const extractedText = await extractTextFromPdfClientSide(selectedFile, (percent, step) => {
-          // Keep progress strictly within 0-85% range during local client-side extraction
           const scaledPercent = Math.floor(5 + (percent / 100) * 80);
           setExtractionProgress(scaledPercent);
           setExtractionStep(step);
-
-          if (step.includes('Initializing')) {
-            addLocalLog(step, 'SYSTEM');
-          } else if (step.includes('Reading') || step.includes('Decrypting')) {
-            addLocalLog(step, 'INFO');
-          } else if (step.includes('Scanning')) {
-            addLocalLog(step, 'INFO');
-          } else if (step.includes('OCR') || step.includes('local deep OCR scan')) {
-            addLocalLog(step, 'OCR');
-          } else if (step.includes('Rendering')) {
-            addLocalLog(step, 'INFO');
-          } else if (step.includes('Dismantling')) {
-            addLocalLog(step, 'SYSTEM');
-          } else {
-            addLocalLog(step, 'INFO');
-          }
-        });
+          addLocalLog(step, 'INFO');
+        }, startPageInput);
 
         if (!extractedText || extractedText.trim().length === 0) {
           throw new Error('Could not extract any readable text or OCR characters from this PDF file locally.');
         }
 
-        addLocalLog(`Successfully extracted ${extractedText.length} characters of raw text and layout matrices.`, 'SUCCESS');
+        addLocalLog(`Successfully extracted ${extractedText.length} characters of raw text.`, 'SUCCESS');
         addLocalLog('Preparing structured content layout formatting rules...', 'SYSTEM');
 
-        // Split extracted text into pages using page markers
         const parts = extractedText.split(/--- PAGE \d+(?: \(SCANNED OCR\))? ---/);
         const pages = parts.slice(1).map(p => p.trim());
         
@@ -801,99 +997,27 @@ export default function App() {
           const chunkPages = pages.slice(i, i + chunkSize);
           let chunkText = "";
           for (let j = 0; j < chunkPages.length; j++) {
-            const globalPageNum = i + j + 1;
+            const globalPageNum = (startPageInput - 1) + i + j + 1;
             chunkText += `\n\n--- PAGE ${globalPageNum} ---\n\n` + chunkPages[j];
           }
           chunks.push(chunkText);
         }
-        
-        addLocalLog(`Segmented document into ${chunks.length} processing batch(es) (maximum ${chunkSize} pages per batch).`, 'SYSTEM');
-        
-        const allData: any[] = [];
-        let fallbackUsed = false;
-        let fallbackMsg = "";
-        
-        for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
-          const chunk = chunks[cIdx];
-          const startPage = cIdx * chunkSize + 1;
-          const endPage = Math.min((cIdx + 1) * chunkSize, pages.length);
-          
-          addLocalLog(`Transmitting batch ${cIdx + 1} of ${chunks.length} (Pages ${startPage} to ${endPage}) to Gemini formatting endpoint /api/extract-text...`, 'AI');
-          setExtractionStep(`Structuring batch ${cIdx + 1}/${chunks.length} (Pages ${startPage}-${endPage})...`);
-          
-          const baseProgress = 85 + Math.floor((cIdx / chunks.length) * 14);
-          setExtractionProgress(baseProgress);
-          
-          let response: Response;
-          let retriesLeft = 4;
-          let delayMs = 3000;
-          
-          while (true) {
-            response = await fetch('/api/extract-text', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                text: chunk,
-                filename: selectedFile.name,
-              }),
-            });
-            
-            if (response.ok) {
-              break;
-            }
-            
-            const isRateLimited = response.status === 429;
-            const isServerError = response.status >= 500;
-            
-            if (retriesLeft > 0 && (isRateLimited || isServerError)) {
-              const reason = isRateLimited ? "Rate limit (429)" : `Server status (${response.status})`;
-              addLocalLog(`${reason} encountered. Retrying batch ${cIdx + 1} in ${delayMs / 1000}s... (${retriesLeft} retries left)`, 'SYSTEM');
-              await new Promise(resolve => setTimeout(resolve, delayMs));
-              retriesLeft--;
-              delayMs *= 2;
-            } else {
-              const errorText = await response.text();
-              throw new Error(errorText || `Formatting failed for batch ${cIdx + 1} (${response.status})`);
-            }
-          }
-          
-          const contentType = response.headers.get('content-type') || '';
-          if (!contentType.includes('application/json')) {
-            const responseText = await response.text();
-            if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
-              throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
-            }
-            throw new Error(`Expected JSON response, but received content-type "${contentType}" for batch ${cIdx + 1}`);
-          }
-          
-          const chunkResult = await response.json();
-          if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
-            allData.push(...chunkResult.data);
-            if (chunkResult.fallbackUsed) {
-              fallbackUsed = true;
-              fallbackMsg = chunkResult.message || fallbackMsg;
-            }
-          } else {
-            throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
-          }
 
-          // Add pacing delay to prevent hitting Gemini's 15 RPM free tier rate limit
-          if (cIdx < chunks.length - 1) {
-            addLocalLog(`Pacing request flow... Waiting 2.5s before next batch...`, 'SYSTEM');
-            await new Promise(resolve => setTimeout(resolve, 2500));
-          }
-        }
+        addLocalLog(`Segmented document into ${chunks.length} processing batch(es).`, 'SYSTEM');
         
-        result = {
-          success: true,
-          data: allData,
-          fallbackUsed,
-          message: fallbackMsg
+        const queue = {
+          chunks,
+          mode: 'free' as const,
+          filename: selectedFile.name,
+          nextIndex: 0,
+          chunkSize,
+          startPageOffset: startPageInput - 1
         };
+        
+        setCurrentExtractionQueue(queue);
+        await processQueue(queue);
+
       } else {
-        // Mode A: Direct Cloud Upload (Multi-modal Gemini Direct Extraction)
         setExtractionStep('Initializing Direct Document Gateway...');
         addLocalLog('Reading file structure into memory buffer...', 'INFO');
         
@@ -905,9 +1029,9 @@ export default function App() {
         const pageCount = srcDoc.getPageCount();
         
         const chunkSize = 2;
-        const chunks: string[] = []; // Array of base64 PDF chunks
+        const chunks: string[] = [];
         
-        for (let i = 0; i < pageCount; i += chunkSize) {
+        for (let i = startPageInput - 1; i < pageCount; i += chunkSize) {
           const newDoc = await PDFDocument.create();
           const pagesToCopy = Array.from(
             { length: Math.min(chunkSize, pageCount - i) },
@@ -917,7 +1041,6 @@ export default function App() {
           copiedPages.forEach(page => newDoc.addPage(page));
           const newPdfBytes = await newDoc.save();
           
-          // Convert Uint8Array to base64 string
           let binary = '';
           const len = newPdfBytes.byteLength;
           for (let k = 0; k < len; k++) {
@@ -926,174 +1049,26 @@ export default function App() {
           const base64 = window.btoa(binary);
           chunks.push(base64);
         }
-        
-        addLocalLog(`Segmented document into ${chunks.length} multi-modal upload batch(es) (maximum ${chunkSize} pages per batch).`, 'SYSTEM');
-        
-        const allData: any[] = [];
-        let fallbackUsed = false;
-        let fallbackMsg = "";
-        
-        for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
-          const chunk = chunks[cIdx];
-          const startPage = cIdx * chunkSize + 1;
-          const endPage = Math.min((cIdx + 1) * chunkSize, pageCount);
-          
-          addLocalLog(`Uploading batch ${cIdx + 1} of ${chunks.length} (Pages ${startPage} to ${endPage}) to Gemini direct gateway...`, 'AI');
-          setExtractionStep(`Extracting batch ${cIdx + 1}/${chunks.length} (Pages ${startPage}-${endPage})...`);
-          
-          const baseProgress = 10 + Math.floor((cIdx / chunks.length) * 88);
-          setExtractionProgress(baseProgress);
-          
-          let response: Response;
-          let retriesLeft = 4;
-          let delayMs = 3000;
-          
-          while (true) {
-            response = await fetch('/api/extract', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                file: chunk,
-                filename: `batch-${cIdx + 1}.pdf`,
-              }),
-            });
-            
-            if (response.ok) {
-              break;
-            }
-            
-            const isRateLimited = response.status === 429;
-            const isServerError = response.status >= 500;
-            
-            if (retriesLeft > 0 && (isRateLimited || isServerError)) {
-              const reason = isRateLimited ? "Rate limit (429)" : `Server status (${response.status})`;
-              addLocalLog(`${reason} encountered. Retrying batch ${cIdx + 1} in ${delayMs / 1000}s... (${retriesLeft} retries left)`, 'SYSTEM');
-              await new Promise(resolve => setTimeout(resolve, delayMs));
-              retriesLeft--;
-              delayMs *= 2;
-            } else {
-              const errorText = await response.text();
-              throw new Error(errorText || `Direct extraction failed for batch ${cIdx + 1} (${response.status})`);
-            }
-          }
-          
-          const contentType = response.headers.get('content-type') || '';
-          if (!contentType.includes('application/json')) {
-            const responseText = await response.text();
-            if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
-              throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
-            }
-            throw new Error(`Expected JSON response, but received content-type "${contentType}" for batch ${cIdx + 1}`);
-          }
-          
-          const chunkResult = await response.json();
-          if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
-            allData.push(...chunkResult.data);
-            if (chunkResult.fallbackUsed) {
-              fallbackUsed = true;
-              fallbackMsg = chunkResult.message || fallbackMsg;
-            }
-          } else {
-            throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
-          }
 
-          // Add pacing delay to prevent hitting Gemini's 15 RPM free tier rate limit
-          if (cIdx < chunks.length - 1) {
-            addLocalLog(`Pacing request flow... Waiting 2.5s before next batch...`, 'SYSTEM');
-            await new Promise(resolve => setTimeout(resolve, 2500));
-          }
-        }
-        
-        result = {
-          success: true,
-          data: allData,
-          fallbackUsed,
-          message: fallbackMsg
+        addLocalLog(`Segmented document into ${chunks.length} upload batch(es).`, 'SYSTEM');
+
+        const queue = {
+          chunks,
+          mode: 'direct' as const,
+          filename: selectedFile.name,
+          nextIndex: 0,
+          chunkSize,
+          startPageOffset: startPageInput - 1
         };
-      }
 
-      if (result && result.success && Array.isArray(result.data)) {
-        if (progressInterval) clearInterval(progressInterval);
-        setExtractionProgress(100);
-        setExtractionStep('Reconstruction completed successfully!');
-        addLocalLog(`Successfully structured ${result.data.length} case diary entry(ies).`, 'SUCCESS');
-        addLocalLog('Pipeline complete. Rendering data schemas in Workspace...', 'SUCCESS');
-
-        // Map extracted indices to unique string IDs
-        const rawDiaries: CaseDiary[] = result.data.map((diary: any, idx: number) => ({
-          ...diary,
-          id: `${Date.now()}-${idx}`,
-          policeStation: diary.policeStation || 'VIKKIRAMANGALAM',
-          district: diary.district || 'ARIYALUR',
-          crNoAndSecOfLaw: diary.crNoAndSecOfLaw || '0288/2018',
-          dateTimeAndPlaceOfOccurrence: diary.dateTimeAndPlaceOfOccurrence || '',
-          dateOfCd: diary.dateOfCd || '',
-          dateOfReportTime: diary.dateOfReportTime || '',
-          complainant: diary.complainant || '',
-          accusedList: Array.isArray(diary.accusedList) ? diary.accusedList : [],
-          propertyLostDetails: diary.propertyLostDetails || '',
-          recoveredPropertyDetails: diary.recoveredPropertyDetails || '',
-          dateOfPreviousCaseDiary: diary.dateOfPreviousCaseDiary || '',
-          stageOfTheCase: diary.stageOfTheCase || 'PENDING TRIAL',
-          courtRefNo: diary.courtRefNo || '',
-          hearingNo: diary.hearingNo || '',
-          courtNameAndPlace: diary.courtNameAndPlace || '',
-          whetherMagistratePresent: diary.whetherMagistratePresent || 'YES',
-          whetherAppPpPresent: diary.whetherAppPpPresent || 'YES',
-          whetherDefenceCounselPresent: diary.whetherDefenceCounselPresent || 'NO',
-          noOfPwsCited: diary.noOfPwsCited || '0',
-          noOfPwsExaminedSoFar: diary.noOfPwsExaminedSoFar || '0',
-          noOfPwsExaminedToday: diary.noOfPwsExaminedToday || '0',
-          totalNoOfAccusedCharged: diary.totalNoOfAccusedCharged || '0',
-          noOfAccusedPresent: diary.noOfAccusedPresent || '0',
-          noOfAccusedAbsent: diary.noOfAccusedAbsent || '0',
-          remarks: diary.remarks || '',
-          postedFor: diary.postedFor || '',
-          nextHearingDate: diary.nextHearingDate || '',
-          attendedBy: diary.attendedBy || '',
-        }));
-
-        // Remove duplicate entries with the exact same crime number, police station, and date of CD
-        const seenDiariesKeys = new Set<string>();
-        const formattedDiaries: CaseDiary[] = [];
-
-        rawDiaries.forEach((diary) => {
-          const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
-          if (!seenDiariesKeys.has(key)) {
-            seenDiariesKeys.add(key);
-            formattedDiaries.push(diary);
-          }
-        });
-
-        // Delay slightly for visual satisfaction of reaching 100%
-        setTimeout(() => {
-          setDiaries(formattedDiaries);
-          setSelectedDiaryId(formattedDiaries[0].id);
-          setSelectedFile(null);
-          setIsExtracting(false);
-          setExtractionProgress(0);
-
-          // Prefill database name from extracted data
-          const firstDiary = formattedDiaries[0];
-          const crimeNo = (firstDiary.crNoAndSecOfLaw || 'Diary').split(',')[0].replace(/[\/\\?%*:|"<>]/g, '-').trim();
-          const station = firstDiary.policeStation || 'Record';
-          const defaultName = `Database - CR No ${crimeNo} - ${station}`;
-          setDbNameInput(defaultName);
-          setShowSaveDbPrompt(true);
-        }, 600);
-
-      } else {
-        throw new Error('Server returned invalid structured data format.');
+        setCurrentExtractionQueue(queue);
+        await processQueue(queue);
       }
     } catch (err: any) {
-      if (progressInterval) clearInterval(progressInterval);
-      console.error('Reconstruction error:', err);
-      addLocalLog(err.message || 'Unknown processing exception occurred during execution.', 'ERROR');
-      setConversionError(err.message || 'Failed to complete formatting reconstruction. Please retry.');
+      console.error('Reconstruction setup error:', err);
+      addLocalLog(err.message || 'Error initializing extraction.', 'ERROR');
+      setConversionError(err.message || 'Failed to initialize formatting reconstruction.');
       setIsExtracting(false);
-      setExtractionProgress(0);
     }
   };
 
@@ -1413,16 +1388,8 @@ export default function App() {
                     <span>{isLoggingIn ? 'Connecting...' : 'Connect to Google Workspace'}</span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={handleGuestAccess}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-2.5 border border-transparent rounded-2xl bg-indigo-50 hover:bg-indigo-100 text-indigo-750 text-xs font-bold transition-all cursor-pointer"
-                  >
-                    <span>Continue in Offline / Guest Mode</span>
-                  </button>
-
                   <p className="text-[10px] text-gray-400 mt-2 text-center leading-relaxed font-medium">
-                    If Google Sign-In is blocked inside your sandbox preview iFrame, click <strong>Continue in Guest Mode</strong> above to format and reconstruct documents offline.
+                    Please sign in using an authorized Google Workspace account. Access to other roles requires admin permission.
                   </p>
                 </div>
               </div>
@@ -2012,6 +1979,255 @@ export default function App() {
 
               {activeTab === 'editor' && (
                 <div className="w-full flex flex-col gap-6">
+                  {/* Extraction Control Panel inside Workspace */}
+                  {selectedFile && (
+                    <div className="bg-white/85 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm flex flex-col gap-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-150">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2.5 bg-indigo-50 text-indigo-650 rounded-xl">
+                            <Layers className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-gray-955">Extraction Gateway Terminal</h4>
+                            <p className="text-[11px] text-gray-400 font-medium">Reconstruct selected PDF: <strong className="text-gray-600 font-bold">{selectedFile.name}</strong></p>
+                          </div>
+                        </div>
+                        {isExtracting && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[10px] font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md animate-pulse">
+                              {extractionProgress}%
+                            </span>
+                            {isPaused ? (
+                              <button
+                                onClick={handleResume}
+                                className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                              >
+                                <Play className="w-3 h-3" />
+                                Resume
+                              </button>
+                            ) : (
+                              <button
+                                onClick={handlePause}
+                                className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                              >
+                                <Pause className="w-3 h-3" />
+                                Pause
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {!isExtracting && !currentExtractionQueue && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-450 uppercase tracking-wider mb-2">Start Page</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={startPageInput}
+                              onChange={(e) => setStartPageInput(Math.max(1, parseInt(e.target.value) || 1))}
+                              className="w-full bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-2 text-xs font-semibold text-gray-900 shadow-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-450 uppercase tracking-wider mb-2">Extraction Mode</label>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setExtractionMode('free')}
+                                className={`py-1.5 px-2 rounded-xl text-center text-xs font-bold border transition-all cursor-pointer ${
+                                  extractionMode === 'free'
+                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-xs'
+                                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                                }`}
+                              >
+                                Free OCR
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setExtractionMode('direct')}
+                                className={`py-1.5 px-2 rounded-xl text-center text-xs font-bold border transition-all cursor-pointer ${
+                                  extractionMode === 'direct'
+                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-xs'
+                                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                                }`}
+                              >
+                                Direct Cloud
+                              </button>
+                            </div>
+                          </div>
+                          <div className="flex items-end">
+                            <button
+                              onClick={runExtraction}
+                              className="w-full bg-indigo-650 hover:bg-indigo-700 text-white py-2 px-4 rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                              <Sparkles className="w-3.5 h-3.5" />
+                              AI Reconstruct & Format
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Active reconstruction progress bar */}
+                      {(isExtracting || currentExtractionQueue) && (
+                        <div className="space-y-3 mt-2">
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-gray-800">
+                            <span className="truncate max-w-[80%]">{extractionStep}</span>
+                            <span className="font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
+                              {extractionProgress}%
+                            </span>
+                          </div>
+                          <div className="w-full h-2.5 bg-gray-150 rounded-full overflow-hidden relative border border-gray-200/50">
+                            <div 
+                              className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-300"
+                              style={{ width: `${extractionProgress}%` }}
+                            />
+                          </div>
+                          {extractionLogs.length > 0 && (
+                            <div 
+                              className="bg-slate-950 rounded-2xl p-4 border border-slate-900 font-mono text-[9px] leading-relaxed text-slate-300 max-h-[120px] overflow-y-auto shadow-inner flex flex-col gap-1 select-none"
+                              style={{ scrollBehavior: 'smooth' }}
+                            >
+                              {extractionLogs.map((log, index) => {
+                                let colorClass = 'text-slate-300';
+                                if (log.includes('[SYSTEM]')) colorClass = 'text-sky-400';
+                                else if (log.includes('[OCR]')) colorClass = 'text-fuchsia-400';
+                                else if (log.includes('[AI]')) colorClass = 'text-amber-400';
+                                else if (log.includes('[RECONSTRUCT]')) colorClass = 'text-indigo-400';
+                                else if (log.includes('[SUCCESS]')) colorClass = 'text-emerald-400 font-semibold';
+                                else if (log.includes('[ERROR]')) colorClass = 'text-rose-400 font-semibold';
+                                return (
+                                  <div key={index} className={colorClass}>
+                                    {log}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Inline Case Navigation and Search bar inside Workspace */}
+                  {diaries.length > 0 && (
+                    <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider block mb-2">
+                          Select Case Number to Edit ({diaries.length} cases in workspace)
+                        </span>
+                        <div className="flex flex-wrap gap-2 max-h-[140px] overflow-y-auto pr-1">
+                          {diaries.map((diary) => {
+                            const isSelected = selectedDiaryId === diary.id;
+                            return (
+                              <button
+                                key={diary.id}
+                                onClick={() => setSelectedDiaryId(diary.id)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5 ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                                }`}
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span className="truncate max-w-[150px]">
+                                  {diary.crNoAndSecOfLaw.split(' ')[0] || diary.crNoAndSecOfLaw || 'Case Record'}
+                                </span>
+                                <span className="text-[9.5px] opacity-75 font-normal">({diary.dateOfCd || 'No Date'})</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Dropdown Workspace Search Widget */}
+                      <div className="relative shrink-0 w-full md:w-auto self-end md:self-center">
+                        <button
+                          onClick={() => setShowWorkspaceSearch(!showWorkspaceSearch)}
+                          className="w-full md:w-auto px-4 py-2 border border-gray-250 bg-white hover:bg-gray-50 text-gray-605 hover:text-indigo-650 rounded-xl transition-all cursor-pointer shadow-xs flex items-center justify-center gap-2 font-bold text-xs"
+                          title="Search and load a saved database or case"
+                        >
+                          <Search className="w-4 h-4 text-indigo-500" />
+                          Load/Search Case
+                        </button>
+                        
+                        {showWorkspaceSearch && (
+                          <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-2xl shadow-xl p-3.5 z-50 animate-fade-in">
+                            <div className="flex items-center justify-between pb-2 border-b border-gray-100 mb-2">
+                              <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider">Search Case Library</span>
+                              <button 
+                                onClick={() => setShowWorkspaceSearch(false)}
+                                className="text-gray-400 hover:text-gray-600 font-bold text-xs"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                            <input
+                              type="text"
+                              placeholder="Search past case no, station, or DB..."
+                              value={workspaceSearchQuery}
+                              onChange={(e) => setWorkspaceSearchQuery(e.target.value)}
+                              className="w-full px-3 py-1.5 border border-gray-200 focus:border-indigo-500 rounded-xl text-xs font-semibold text-gray-900 shadow-sm focus:outline-none"
+                              autoFocus
+                            />
+                            <div className="mt-2.5 max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                              {(() => {
+                                const query = workspaceSearchQuery.toLowerCase().trim();
+                                const matches: { db: SavedDatabase; diary: CaseDiary; matchText: string }[] = [];
+                                
+                                savedDatabases.forEach((db) => {
+                                  db.diaries.forEach((diary) => {
+                                    const crNo = diary.crNoAndSecOfLaw || '';
+                                    const station = diary.policeStation || '';
+                                    const dateOfCd = diary.dateOfCd || '';
+                                    
+                                    if (!query || 
+                                        db.name.toLowerCase().includes(query) ||
+                                        crNo.toLowerCase().includes(query) ||
+                                        station.toLowerCase().includes(query) ||
+                                        dateOfCd.toLowerCase().includes(query)
+                                    ) {
+                                      matches.push({
+                                        db,
+                                        diary,
+                                        matchText: `${crNo} (${dateOfCd}) - ${station}`
+                                      });
+                                    }
+                                  });
+                                });
+                                
+                                if (matches.length === 0) {
+                                  return <p className="text-[10px] text-gray-400 text-center py-4 font-semibold">No matching cases found</p>;
+                                }
+                                
+                                return matches.map(({ db, diary }, idx) => (
+                                  <button
+                                    key={`${db.id}-${diary.id}-${idx}`}
+                                    onClick={() => {
+                                      setDiaries(db.diaries);
+                                      setSelectedDiaryId(diary.id);
+                                      setLoadedDbId(db.id);
+                                      setLoadedDbName(db.name);
+                                      setIsSaved(true);
+                                      setShowWorkspaceSearch(false);
+                                      setWorkspaceSearchQuery('');
+                                      addLocalLog(`Loaded case "${diary.crNoAndSecOfLaw}" from database "${db.name}"`, 'SYSTEM');
+                                    }}
+                                    className="w-full text-left p-2 rounded-xl hover:bg-indigo-50/50 hover:text-indigo-950 transition-all text-[11px] font-semibold text-gray-700 flex flex-col gap-0.5 border border-transparent hover:border-indigo-100 cursor-pointer"
+                                  >
+                                    <span className="text-indigo-955 truncate font-bold">{diary.crNoAndSecOfLaw}</span>
+                                    <span className="text-[9.5px] text-gray-400 truncate">Station: {diary.policeStation} • DB: {db.name}</span>
+                                  </button>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Save to Database Banner Prompt */}
                   {showSaveDbPrompt && diaries.length > 0 && (
                     <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -2501,6 +2717,66 @@ export default function App() {
                           </div>
                         </div>
 
+                      </div>
+
+                      {/* Pinned Bottom Action Buttons */}
+                      <div className="flex flex-wrap items-center gap-2.5 shrink-0 justify-end pt-5 border-t border-gray-150 mt-5">
+                        {loadedDbId ? (
+                          <button
+                            onClick={handleUpdateDatabase}
+                            className="bg-indigo-650 hover:bg-indigo-755 text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            Sync Updates to DB
+                          </button>
+                        ) : (
+                          <button
+                            onClick={handleSaveToDatabase}
+                            className="bg-indigo-650 hover:bg-indigo-755 text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            Save to Database
+                          </button>
+                        )}
+                        <button
+                          id="save-draft-btn-bottom"
+                          onClick={saveWorkspaceChanges}
+                          className="border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
+                        >
+                          {isSaved ? (
+                            <>
+                              <Check className="w-4 h-4 text-green-600" />
+                              <span className="text-green-700">Changes Saved!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Save className="w-4 h-4 text-gray-400" />
+                              Save Draft
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          id="export-docx-btn-bottom"
+                          onClick={() => handleDownloadDocx(activeDiary)}
+                          className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                          title="Export the currently viewed case diary to Word"
+                        >
+                          <FileDown className="w-4 h-4 text-gray-400" />
+                          Export Case Word
+                        </button>
+
+                        {diaries.length > 1 && (
+                          <button
+                            id="export-all-docx-btn-bottom"
+                            onClick={() => handleDownloadAllDocx(diaries, `Combined-Case-Diaries-${Date.now()}`)}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 px-4 rounded-xl flex items-center gap-2 cursor-pointer shadow-sm hover:shadow transition-all"
+                            title="Export all loaded case diaries combined into a single Word document"
+                          >
+                            <FileDown className="w-4 h-4" />
+                            Export Combined Word ({diaries.length})
+                          </button>
+                        )}
                       </div>
                     </div>
                   ) : (

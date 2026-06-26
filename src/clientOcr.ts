@@ -27,7 +27,8 @@ export const loadPdfJs = async (): Promise<any> => {
  */
 export const extractTextFromPdfClientSide = async (
   file: File, 
-  onProgress: (percent: number, step: string) => void
+  onProgress: (percent: number, step: string) => void,
+  startPageNum: number = 1
 ): Promise<string> => {
   onProgress(5, 'Initializing high-fidelity Client-Side PDF Engine...');
   const pdfjsLib = await loadPdfJs();
@@ -44,7 +45,7 @@ export const extractTextFromPdfClientSide = async (
 
   let tesseractWorker: any = null;
 
-  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+  for (let pageNum = startPageNum; pageNum <= numPages; pageNum++) {
     const pageProgressBase = 20 + Math.floor(((pageNum - 1) / numPages) * 75);
     onProgress(pageProgressBase, `Reading structural elements of Page ${pageNum} of ${numPages}...`);
 
