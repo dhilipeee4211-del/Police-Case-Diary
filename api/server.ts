@@ -78,21 +78,17 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Only PDF files are supported' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    const apiKeys = [
+      process.env.GEMINI_API_KEY,
+      process.env.GEMINI_API_KEY_2,
+      process.env.GEMINI_API_KEY_3
+    ].filter(Boolean) as string[];
+
+    if (apiKeys.length === 0) {
       return res.status(500).json({
-        error: 'GEMINI_API_KEY environment variable is not configured. Please define it in your Secrets.',
+        error: 'No Gemini API keys are configured. Please define GEMINI_API_KEY in your Secrets.',
       });
     }
-
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
 
     const prompt = `
 Analyze the uploaded Tamil Nadu Police Case Diary PDF document and extract ALL distinct case diary entries or hearing records contained in it.
@@ -179,40 +175,69 @@ Ensure that you:
       }
     };
 
-    for (const modelName of modelsToTry) {
-      try {
-        console.log(`Attempting document extraction with model: ${modelName}`);
-        
-        const response = await retryWithBackoff(() =>
-          ai.models.generateContent({
-            model: modelName,
-            contents: [
-              {
-                inlineData: {
-                  data: base64Pdf,
-                  mimeType: 'application/pdf',
+    keyLoop: for (let k = 0; k < apiKeys.length; k++) {
+      const apiKey = apiKeys[k];
+      console.log(`Attempting document extraction using API Key index ${k + 1}/${apiKeys.length}`);
+      
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      for (const modelName of modelsToTry) {
+        try {
+          console.log(`Attempting document extraction with model: ${modelName} using API Key index ${k + 1}`);
+          
+          const response = await retryWithBackoff(() =>
+            ai.models.generateContent({
+              model: modelName,
+              contents: [
+                {
+                  inlineData: {
+                    data: base64Pdf,
+                    mimeType: 'application/pdf',
+                  },
                 },
+                prompt,
+              ],
+              config: {
+                responseMimeType: 'application/json',
               },
-              prompt,
-            ],
-            config: {
-              responseMimeType: 'application/json',
-            },
-          })
-        );
+            })
+          );
 
-        const responseText = response.text;
-        if (!responseText) {
-          throw new Error('Gemini API returned an empty response.');
+          const responseText = response.text;
+          if (!responseText) {
+            throw new Error('Gemini API returned an empty response.');
+          }
+
+          // Try parsing the response directly
+          extractedData = parseRobustJson(responseText);
+          console.log(`Successfully extracted document contents using model: ${modelName} and API Key index ${k + 1}`);
+          break keyLoop; // Exit both loops on success
+        } catch (err: any) {
+          console.warn(`Model ${modelName} failed or was overloaded with API Key index ${k + 1}:`, err.message || err);
+          lastError = err;
+
+          // Check if this error is a quota/rate-limit error (429 or RESOURCE_EXHAUSTED).
+          // If so, we should skip all remaining models for this API key and try the next key immediately.
+          const errStr = String(err.message || err);
+          const isQuotaExceeded =
+            errStr.includes('Quota exceeded') ||
+            errStr.includes('limit:') ||
+            errStr.includes('RESOURCE_EXHAUSTED') ||
+            err.status === 429 ||
+            err.code === 429;
+          
+          if (isQuotaExceeded) {
+            console.warn(`Quota exceeded for API Key index ${k + 1}. Transitioning to next API Key...`);
+            continue keyLoop;
+          }
         }
-
-        // Try parsing the response directly
-        extractedData = parseRobustJson(responseText);
-        console.log(`Successfully extracted document contents using model: ${modelName}`);
-        break; // Exit the loop on success
-      } catch (err: any) {
-        console.warn(`Model ${modelName} failed or was overloaded:`, err.message || err);
-        lastError = err;
       }
     }
 
@@ -326,21 +351,17 @@ app.post('/api/extract-text', async (req, res) => {
       return res.status(400).json({ error: 'No raw text provided for reconstruction.' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    const apiKeys = [
+      process.env.GEMINI_API_KEY,
+      process.env.GEMINI_API_KEY_2,
+      process.env.GEMINI_API_KEY_3
+    ].filter(Boolean) as string[];
+
+    if (apiKeys.length === 0) {
       return res.status(500).json({
-        error: 'GEMINI_API_KEY environment variable is not configured. Please define it in your Secrets.',
+        error: 'No Gemini API keys are configured. Please define GEMINI_API_KEY in your Secrets.',
       });
     }
-
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
 
     const prompt = `
 Analyze the following raw extracted text of Tamil Nadu Police Case Diaries, and extract ALL distinct case diary entries or hearing records contained in it.
@@ -430,31 +451,59 @@ Ensure that you:
       }
     };
 
-    for (const modelName of modelsToTry) {
-      try {
-        console.log(`Attempting raw text parsing with model: ${modelName}`);
-        
-        const response = await retryWithBackoff(() =>
-          ai.models.generateContent({
-            model: modelName,
-            contents: [prompt],
-            config: {
-              responseMimeType: 'application/json',
-            },
-          })
-        );
+    keyLoop: for (let k = 0; k < apiKeys.length; k++) {
+      const apiKey = apiKeys[k];
+      console.log(`Attempting text parsing using API Key index ${k + 1}/${apiKeys.length}`);
+      
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
 
-        const responseText = response.text;
-        if (!responseText) {
-          throw new Error('Gemini API returned an empty response.');
+      for (const modelName of modelsToTry) {
+        try {
+          console.log(`Attempting raw text parsing with model: ${modelName} using API Key index ${k + 1}`);
+          
+          const response = await retryWithBackoff(() =>
+            ai.models.generateContent({
+              model: modelName,
+              contents: [prompt],
+              config: {
+                responseMimeType: 'application/json',
+              },
+            })
+          );
+
+          const responseText = response.text;
+          if (!responseText) {
+            throw new Error('Gemini API returned an empty response.');
+          }
+
+          extractedData = parseRobustJson(responseText);
+          console.log(`Successfully structured document from text using model: ${modelName} and API Key index ${k + 1}`);
+          break keyLoop;
+        } catch (err: any) {
+          console.warn(`Model ${modelName} text parser failed or was overloaded with API Key index ${k + 1}:`, err.message || err);
+          lastError = err;
+
+          // Check for quota/rate-limit error to fall back to the next key
+          const errStr = String(err.message || err);
+          const isQuotaExceeded =
+            errStr.includes('Quota exceeded') ||
+            errStr.includes('limit:') ||
+            errStr.includes('RESOURCE_EXHAUSTED') ||
+            err.status === 429 ||
+            err.code === 429;
+          
+          if (isQuotaExceeded) {
+            console.warn(`Quota exceeded for text parsing API Key index ${k + 1}. Transitioning to next API Key...`);
+            continue keyLoop;
+          }
         }
-
-        extractedData = parseRobustJson(responseText);
-        console.log(`Successfully structured document from text using model: ${modelName}`);
-        break;
-      } catch (err: any) {
-        console.warn(`Model ${modelName} text parser failed or was overloaded:`, err.message || err);
-        lastError = err;
       }
     }
 
