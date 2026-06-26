@@ -43,7 +43,7 @@ import { exportDiariesToZip } from './exportZip';
 import { User } from 'firebase/auth';
 import { CaseDiary, Accused, SavedDatabase } from './types';
 import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase } from './dbHelper';
-import { extractTextFromPdfClientSide } from './clientOcr';
+import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
 
 
 export default function App() {
@@ -627,6 +627,24 @@ export default function App() {
     try {
       let result: any = null;
 
+      // Pre-check page count client-side to enforce limits and guide the user
+      let numPages = 0;
+      try {
+        const pdfjsLib = await loadPdfJs();
+        const arrayBuffer = await selectedFile.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        numPages = pdf.numPages;
+        addLocalLog(`Verified PDF structure: ${numPages} page(s) found.`, 'SYSTEM');
+      } catch (err: any) {
+        console.warn("Failed to precheck page count client-side:", err);
+      }
+
+      if (numPages > 20 && extractionMode === 'direct') {
+        addLocalLog(`Warning: Cloud Upload (Direct) mode is limited to 20 pages to prevent serverless timeouts.`, 'ERROR');
+        addLocalLog(`Please switch the extraction option to 'Unlimited Free (Local Browser OCR)' to process this ${numPages}-page document.`, 'SYSTEM');
+        throw new Error(`Direct Cloud Upload is restricted to 20 pages due to serverless timeouts. Please select the 'Unlimited Free (Local Browser OCR)' option instead.`);
+      }
+
       if (extractionMode === 'free') {
         // Mode B: Unlimited Free Extraction (Client-Side Parser + Cloud Gemini Formatting)
         setExtractionStep('Initializing high-fidelity Client-Side PDF Engine...');
@@ -634,8 +652,8 @@ export default function App() {
         
         // Run the client-side text-extraction & OCR with REAL progress updates
         const extractedText = await extractTextFromPdfClientSide(selectedFile, (percent, step) => {
-          // Keep progress strictly within 0-92% range during local client-side extraction
-          const scaledPercent = Math.floor(5 + (percent / 100) * 85);
+          // Keep progress strictly within 0-85% range during local client-side extraction
+          const scaledPercent = Math.floor(5 + (percent / 100) * 80);
           setExtractionProgress(scaledPercent);
           setExtractionStep(step);
 
@@ -662,60 +680,83 @@ export default function App() {
 
         addLocalLog(`Successfully extracted ${extractedText.length} characters of raw text and layout matrices.`, 'SUCCESS');
         addLocalLog('Preparing structured content layout formatting rules...', 'SYSTEM');
-        addLocalLog('Transmitting payload to Gemini intelligence endpoint /api/extract-text...', 'AI');
 
-        // Now, we format and structure the raw text using Gemini (progress 93-98%)
-        setExtractionProgress(94);
-        setExtractionStep('Transmitting raw extracted text to Gemini structure model...');
-
-        // Quick simulator during Gemini structured inference
-        let postPercent = 94;
-        let simCount = 0;
-        progressInterval = setInterval(() => {
-          if (postPercent < 99) {
-            postPercent += 1;
-            setExtractionProgress(postPercent);
+        // Split extracted text into pages using page markers
+        const parts = extractedText.split(/--- PAGE \d+(?: \(SCANNED OCR\))? ---/);
+        const pages = parts.slice(1).map(p => p.trim());
+        
+        const chunkSize = 20;
+        const chunks: string[] = [];
+        for (let i = 0; i < pages.length; i += chunkSize) {
+          const chunkPages = pages.slice(i, i + chunkSize);
+          let chunkText = "";
+          for (let j = 0; j < chunkPages.length; j++) {
+            const globalPageNum = i + j + 1;
+            chunkText += `\n\n--- PAGE ${globalPageNum} ---\n\n` + chunkPages[j];
           }
-          simCount++;
-          if (simCount === 1) {
-            addLocalLog('Analyzing case diary metadata pattern arrays (Crime No, Police Station)...', 'AI');
-          } else if (simCount === 3) {
-            addLocalLog('Mapping and validating Accused lists...', 'AI');
-          } else if (simCount === 5) {
-            addLocalLog('Extracting Tamil language remarks/page comments verbatim...', 'AI');
-          } else if (simCount === 7) {
-            addLocalLog('Formulating legal calendar dates and court hearing schedules...', 'AI');
-          }
-        }, 1100);
-
-        const response = await fetch('/api/extract-text', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: extractedText,
-            filename: selectedFile.name,
-          }),
-        });
-
-        if (progressInterval) clearInterval(progressInterval);
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(errorText || `Formatting failed (${response.status})`);
+          chunks.push(chunkText);
         }
-
-        const contentType = response.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          const responseText = await response.text();
-          if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
-            throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
+        
+        addLocalLog(`Segmented document into ${chunks.length} processing batch(es) (maximum ${chunkSize} pages per batch).`, 'SYSTEM');
+        
+        const allData: any[] = [];
+        let fallbackUsed = false;
+        let fallbackMsg = "";
+        
+        for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+          const chunk = chunks[cIdx];
+          const startPage = cIdx * chunkSize + 1;
+          const endPage = Math.min((cIdx + 1) * chunkSize, pages.length);
+          
+          addLocalLog(`Transmitting batch ${cIdx + 1} of ${chunks.length} (Pages ${startPage} to ${endPage}) to Gemini formatting endpoint /api/extract-text...`, 'AI');
+          setExtractionStep(`Structuring batch ${cIdx + 1}/${chunks.length} (Pages ${startPage}-${endPage})...`);
+          
+          const baseProgress = 85 + Math.floor((cIdx / chunks.length) * 14);
+          setExtractionProgress(baseProgress);
+          
+          const response = await fetch('/api/extract-text', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              text: chunk,
+              filename: selectedFile.name,
+            }),
+          });
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Formatting failed for batch ${cIdx + 1} (${response.status})`);
           }
-          throw new Error(`Expected JSON response from formatting endpoint, but received content-type "${contentType}" with body: ${responseText.substring(0, 200)}`);
+          
+          const contentType = response.headers.get('content-type') || '';
+          if (!contentType.includes('application/json')) {
+            const responseText = await response.text();
+            if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
+              throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
+            }
+            throw new Error(`Expected JSON response, but received content-type "${contentType}" for batch ${cIdx + 1}`);
+          }
+          
+          const chunkResult = await response.json();
+          if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
+            allData.push(...chunkResult.data);
+            if (chunkResult.fallbackUsed) {
+              fallbackUsed = true;
+              fallbackMsg = chunkResult.message || fallbackMsg;
+            }
+          } else {
+            throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
+          }
         }
-
-        result = await response.json();
+        
+        result = {
+          success: true,
+          data: allData,
+          fallbackUsed,
+          message: fallbackMsg
+        };
       } else {
         // Mode A: Direct Cloud Upload (Multi-modal Gemini Direct Extraction)
         setExtractionStep('Uploading Case Diary & Setting up Security Context...');
