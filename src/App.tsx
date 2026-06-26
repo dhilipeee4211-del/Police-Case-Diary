@@ -635,6 +635,9 @@ export default function App() {
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         numPages = pdf.numPages;
         addLocalLog(`Verified PDF structure: ${numPages} page(s) found.`, 'SYSTEM');
+        if (numPages > 50) {
+          addLocalLog(`Note: Processing documents larger than 50 pages can take a few minutes due to rate-limit pacing. Please keep this tab open until reconstruction completes.`, 'SYSTEM');
+        }
       } catch (err: any) {
         console.warn("Failed to precheck page count client-side:", err);
       }
@@ -685,7 +688,7 @@ export default function App() {
         const parts = extractedText.split(/--- PAGE \d+(?: \(SCANNED OCR\))? ---/);
         const pages = parts.slice(1).map(p => p.trim());
         
-        const chunkSize = 20;
+        const chunkSize = 10;
         const chunks: string[] = [];
         for (let i = 0; i < pages.length; i += chunkSize) {
           const chunkPages = pages.slice(i, i + chunkSize);
@@ -714,20 +717,39 @@ export default function App() {
           const baseProgress = 85 + Math.floor((cIdx / chunks.length) * 14);
           setExtractionProgress(baseProgress);
           
-          const response = await fetch('/api/extract-text', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              text: chunk,
-              filename: selectedFile.name,
-            }),
-          });
+          let response: Response;
+          let retriesLeft = 4;
+          let delayMs = 3000;
           
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(errorText || `Formatting failed for batch ${cIdx + 1} (${response.status})`);
+          while (true) {
+            response = await fetch('/api/extract-text', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                text: chunk,
+                filename: selectedFile.name,
+              }),
+            });
+            
+            if (response.ok) {
+              break;
+            }
+            
+            const isRateLimited = response.status === 429;
+            const isServerError = response.status >= 500;
+            
+            if (retriesLeft > 0 && (isRateLimited || isServerError)) {
+              const reason = isRateLimited ? "Rate limit (429)" : `Server status (${response.status})`;
+              addLocalLog(`${reason} encountered. Retrying batch ${cIdx + 1} in ${delayMs / 1000}s... (${retriesLeft} retries left)`, 'SYSTEM');
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+              retriesLeft--;
+              delayMs *= 2;
+            } else {
+              const errorText = await response.text();
+              throw new Error(errorText || `Formatting failed for batch ${cIdx + 1} (${response.status})`);
+            }
           }
           
           const contentType = response.headers.get('content-type') || '';
