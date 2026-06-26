@@ -38,7 +38,7 @@ export async function saveSavedDatabase(
     name,
     createdAt: Date.now(),
     diaries,
-    synced: existingLocal ? existingLocal.synced : false,
+    synced: existingLocal ? (existingLocal.synced !== false) : false,
   };
 
   // First, always update our client-side localStorage backup cache
@@ -100,10 +100,11 @@ export async function getSavedDatabases(userId: string, email?: string): Promise
           if (!existing) {
             // This database exists in local cache but is NOT on the server.
             // Check if it was previously synced to the server.
-            // If it was previously synced or belongs to another user,
+            // If it was previously synced (defaulting undefined to true) or belongs to another user,
             // it means it was deleted on the server. Discard it!
             const isShared = db.userId !== userId;
-            if (db.synced || isShared) {
+            const isPreviouslySynced = db.synced !== false;
+            if (isPreviouslySynced || isShared) {
               console.log(`Database ${db.id} ("${db.name}") was deleted on the server. Cleaning from local cache.`);
               return; // Discard: do not add to mergedMap
             }
