@@ -360,6 +360,7 @@ export default function App() {
   // Pause/Resume & Custom Starting Page States
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const isPausedRef = useRef<boolean>(false);
+  const isCancelledRef = useRef<boolean>(false);
   const [startPageInput, setStartPageInput] = useState<number>(1);
   const [currentExtractionQueue, setCurrentExtractionQueue] = useState<{
     chunks: any[];
@@ -1576,10 +1577,26 @@ export default function App() {
 
   const handleResume = () => {
     isPausedRef.current = false;
+    isCancelledRef.current = false;
     setIsPaused(false);
     if (currentExtractionQueue) {
       processQueue(currentExtractionQueue);
     }
+  };
+
+  const handleCancel = async () => {
+    isCancelledRef.current = true;
+    isPausedRef.current = false;
+    setIsPaused(false);
+    setIsExtracting(false);
+    setExtractionProgress(0);
+    setExtractionStep('');
+    setCurrentExtractionQueue(null);
+    addLocalLog('Reconstruction cancelled by user.', 'SYSTEM');
+    try {
+      await removeFromIndexedDB('gateway_extraction_queue');
+      await removeFromIndexedDB('gateway_extracted_diaries');
+    } catch (_) {}
   };
 
   const processQueue = async (queue: {
@@ -1595,6 +1612,7 @@ export default function App() {
     setIsExtracting(true);
     setIsPaused(false);
     isPausedRef.current = false;
+    isCancelledRef.current = false;
     setConversionError(null);
 
     const { chunks, mode, filename, nextIndex, chunkSize, startPageOffset } = queue;
@@ -1619,6 +1637,12 @@ export default function App() {
     try {
       for (let cIdx = nextIndex; cIdx < chunks.length; cIdx++) {
         currentProcessingIdx = cIdx;
+        // Cancel check
+        if (isCancelledRef.current) {
+          addLocalLog('Reconstruction cancelled.', 'SYSTEM');
+          setIsExtracting(false);
+          return;
+        }
         if (isPausedRef.current) {
           setCurrentExtractionQueue({
             chunks,
@@ -1654,6 +1678,11 @@ export default function App() {
         let delayMs = 3000;
         
         while (true) {
+          // Cancel check inside retry loop
+          if (isCancelledRef.current) {
+            setIsExtracting(false);
+            return;
+          }
           if (isPausedRef.current) {
             setCurrentExtractionQueue({
               chunks,
@@ -2581,6 +2610,77 @@ export default function App() {
                             </div>
                           </div>
                         )}
+                        {/* Pause / Resume / Cancel Controls */}
+                        <div className="flex items-center gap-2 pt-1">
+                          {isPaused ? (
+                            <button
+                              onClick={handleResume}
+                              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl text-white cursor-pointer shadow-sm transition-all"
+                              style={{ background: 'var(--th-primary)' }}
+                            >
+                              <Play className="w-3.5 h-3.5" />
+                              Resume
+                            </button>
+                          ) : (
+                            <button
+                              onClick={handlePause}
+                              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl cursor-pointer shadow-xs transition-all border"
+                              style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}
+                            >
+                              <Pause className="w-3.5 h-3.5" />
+                              Pause
+                            </button>
+                          )}
+                          <button
+                            onClick={handleCancel}
+                            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl cursor-pointer shadow-xs transition-all border text-red-600 hover:bg-red-50"
+                            style={{ borderColor: '#fca5a5' }}
+                          >
+                            <Trash className="w-3.5 h-3.5" />
+                            Cancel
+                          </button>
+                          {isPaused && (
+                            <span className="text-[10px] font-semibold ml-1" style={{ color: 'var(--th-text3)' }}>Paused — batch progress saved</span>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+
+                    {/* Paused State Banner (when not actively extracting but queue exists) */}
+                    {!isExtracting && isPaused && currentExtractionQueue && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mt-4 p-4 border rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                        style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Pause className="w-4 h-4 shrink-0" style={{ color: 'var(--th-primary)' }} />
+                          <div>
+                            <p className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Reconstruction Paused</p>
+                            <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>
+                              Batch {currentExtractionQueue.nextIndex + 1} of {currentExtractionQueue.chunks.length} — progress saved automatically
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            onClick={handleResume}
+                            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl text-white cursor-pointer shadow-sm transition-all"
+                            style={{ background: 'var(--th-primary)' }}
+                          >
+                            <Play className="w-3.5 h-3.5" />
+                            Resume
+                          </button>
+                          <button
+                            onClick={handleCancel}
+                            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl cursor-pointer transition-all border text-red-600 hover:bg-red-50"
+                            style={{ borderColor: '#fca5a5' }}
+                          >
+                            <Trash className="w-3.5 h-3.5" />
+                            Cancel
+                          </button>
+                        </div>
                       </motion.div>
                     )}
                   </div>
