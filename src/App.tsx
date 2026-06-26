@@ -366,7 +366,6 @@ export default function App() {
     }
 
     setLastExtractedDiaries(savedDiaries);
-    setDiaries(savedDiaries);
     setGatewayDbName(recoveryQueue.gatewayDbName || '');
     setGatewayDbId(recoveryQueue.gatewayDbId || null);
     
@@ -995,6 +994,13 @@ export default function App() {
         return filtered;
       });
       setSelectedDiaryId(lastExtractedDiaries[0].id);
+      
+      // Bind workspace session to the auto-saved cloud database record
+      setLoadedDbId(gatewayDbId);
+      setLoadedDbName(gatewayDbName);
+      setDbNameInput(gatewayDbName);
+      setIsSaved(true);
+
       setActiveTab('editor');
     }
   };
@@ -1233,22 +1239,7 @@ export default function App() {
       attendedBy: diary.attendedBy || '',
     }));
 
-    setDiaries((prev) => {
-      const combined = [...prev, ...rawDiaries];
-      const seenKeys = new Set<string>();
-      const filtered: CaseDiary[] = [];
-      
-      combined.forEach((diary) => {
-        const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          filtered.push(diary);
-        }
-      });
-      
-      return filtered;
-    });
-    
+
     setLastExtractedDiaries(prev => {
       const combined = [...prev, ...rawDiaries];
       const seenKeys = new Set<string>();
@@ -2345,22 +2336,24 @@ export default function App() {
                       </div>
 
                       {/* Cloud Save & Workspace View Actions */}
-                      <div className="border-t pt-4 mt-2 flex flex-col sm:flex-row items-center justify-between gap-4" style={{ borderColor: 'var(--th-border)' }}>
-                        <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-1.5 rounded-xl border border-emerald-100 dark:border-emerald-900/30 text-xs font-semibold">
-                          <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
-                          <span>Auto-saved to Cloud DB: <strong className="font-mono text-[11px]">{gatewayDbName || 'Database'}</strong></span>
-                        </div>
+                      {!isExtracting && (
+                        <div className="border-t pt-4 mt-2 flex flex-col sm:flex-row items-center justify-between gap-4" style={{ borderColor: 'var(--th-border)' }}>
+                          <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-1.5 rounded-xl border border-emerald-100 dark:border-emerald-900/30 text-xs font-semibold">
+                            <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                            <span>Auto-saved to Cloud DB: <strong className="font-mono text-[11px]">{gatewayDbName || 'Database'}</strong></span>
+                          </div>
 
-                        <div className="flex justify-end gap-2.5 w-full sm:w-auto">
-                          <button
-                            onClick={handleViewGatewayInWorkspace}
-                            className="w-full sm:w-auto bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-xs"
-                          >
-                            <Eye className="w-4 h-4 text-gray-400" />
-                            View in Workspace
-                          </button>
+                          <div className="flex justify-end gap-2.5 w-full sm:w-auto">
+                            <button
+                              onClick={handleViewGatewayInWorkspace}
+                              className="w-full sm:w-auto bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                            >
+                              <Eye className="w-4 h-4 text-gray-400" />
+                              View in Workspace
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </motion.div>
                   )}
                 </div>
