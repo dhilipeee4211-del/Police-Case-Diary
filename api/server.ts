@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import multer from 'multer';
+import { createRequire } from 'module';
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
@@ -11,17 +11,20 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
 
-// Initialize Multer for in-memory file storage robustly for ESM / CJS interop
-const multerFn = typeof multer === 'function' ? multer : (multer as any).default || multer;
-const storage = (multerFn.memoryStorage || (multer as any).memoryStorage)();
-const upload = multerFn({
-  storage,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25 MB limit
-  },
-});
+// Initialize Multer for in-memory file storage
+// Uses createRequire to handle multer v2 ESM/CJS interop in Vercel's ncc bundler
+let upload: any;
+try {
+  const _require = createRequire(import.meta.url);
+  const multerMod = _require('multer');
+  const multerFn = typeof multerMod === 'function' ? multerMod : multerMod.default;
+  const storage = multerFn.memoryStorage();
+  upload = multerFn({ storage, limits: { fileSize: 25 * 1024 * 1024 } });
+} catch (e) {
+  console.error('Failed to initialize multer:', e);
+  upload = { single: () => (_req: any, _res: any, next: any) => next() };
+}
 
 // JSON parsing middleware with increased limit for base64 files
 app.use(express.json({ limit: '50mb' }));
