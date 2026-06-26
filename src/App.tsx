@@ -624,7 +624,6 @@ export default function App() {
 
     let progressInterval: NodeJS.Timeout | null = null;
 
-    let fileBuffer: ArrayBuffer | null = null;
     try {
       let result: any = null;
 
@@ -632,8 +631,8 @@ export default function App() {
       let numPages = 0;
       try {
         const pdfjsLib = await loadPdfJs();
-        fileBuffer = await selectedFile.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: fileBuffer }).promise;
+        const precheckBuffer = await selectedFile.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: precheckBuffer }).promise;
         numPages = pdf.numPages;
         addLocalLog(`Verified PDF structure: ${numPages} page(s) found.`, 'SYSTEM');
         if (numPages > 50) {
@@ -785,10 +784,7 @@ export default function App() {
         setExtractionStep('Initializing Direct Document Gateway...');
         addLocalLog('Reading file structure into memory buffer...', 'INFO');
         
-        let fileBufferVal = fileBuffer;
-        if (!fileBufferVal) {
-          fileBufferVal = await selectedFile.arrayBuffer();
-        }
+        const fileBufferVal = await selectedFile.arrayBuffer();
         
         const { PDFDocument } = await import('pdf-lib');
         addLocalLog('Parsing PDF pages into direct multi-modal processing gateway...', 'SYSTEM');
