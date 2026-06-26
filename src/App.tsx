@@ -8,7 +8,6 @@ import {
   FileText, 
   UploadCloud, 
   CheckCircle, 
-  ArrowLeft,
   ArrowRight, 
   Lock, 
   RefreshCw, 
@@ -3323,15 +3322,6 @@ export default function App() {
                       <div className={`flex-1 w-full flex-col gap-6 ${showMobileEditor ? 'flex' : 'hidden lg:flex'}`}>
                         {activeDiary ? (
                           <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
-                            {/* Mobile Back Button */}
-                            <button
-                              className="lg:hidden mb-3 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
-                              style={{ color: 'var(--th-primary)' }}
-                              onClick={() => setShowMobileEditor(false)}
-                            >
-                              <ArrowLeft className="w-4 h-4" />
-                              Back to Case List
-                            </button>
                             {/* Database active session indicator banner */}
                             {loadedDbId && (
                               <div className="mb-4 border rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
