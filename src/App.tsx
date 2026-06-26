@@ -12,6 +12,7 @@ import {
   Lock, 
   RefreshCw, 
   FileDown, 
+  FileUp,
   ExternalLink, 
   Trash2, 
   LogOut, 
@@ -323,6 +324,13 @@ export default function App() {
   const [loadedDbName, setLoadedDbName] = useState<string | null>(null);
   const [gatewayDbId, setGatewayDbId] = useState<string | null>(null);
   const [recoveryQueue, setRecoveryQueue] = useState<any | null>(null);
+
+  const [importConflictData, setImportConflictData] = useState<{
+    dbName: string;
+    diaries: CaseDiary[];
+    existingDb: SavedDatabase;
+  } | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     try {
@@ -837,6 +845,137 @@ export default function App() {
     } catch (err: any) {
       console.error('Save to database error:', err);
       setSaveDbStatus({ type: 'error', message: err.message || 'Failed to save to database.' });
+    }
+  };
+
+  const handleExportDatabase = (dbItem: SavedDatabase) => {
+    try {
+      const backupData = {
+        name: dbItem.name,
+        diaries: dbItem.diaries
+      };
+      const jsonString = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const safeName = dbItem.name.replace(/[\/\\?%*:|"<>]/g, '_');
+      link.download = `${safeName || 'Database'}_backup.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error("Export database error:", err);
+      alert("Failed to export database: " + err.message);
+    }
+  };
+
+  const handleImportDatabase = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!user) {
+      alert("Please log in to import databases.");
+      return;
+    }
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+
+        if (!parsed.name || !Array.isArray(parsed.diaries)) {
+          alert("Invalid backup file format. Must contain a database name and case diary list.");
+          return;
+        }
+
+        const dbName = parsed.name.trim();
+        const importedDiaries = parsed.diaries;
+
+        // Check for duplicate name
+        const existingDb = savedDatabases.find(db => db.name.toLowerCase() === dbName.toLowerCase());
+
+        if (existingDb) {
+          // Open custom conflict resolution dialog modal
+          setImportConflictData({
+            dbName,
+            diaries: importedDiaries,
+            existingDb
+          });
+        } else {
+          // No conflict, save directly
+          setSaveDbStatus({ type: 'loading', message: `Importing database "${dbName}"...` });
+          const saved = await saveSavedDatabase(dbName, importedDiaries, user.uid);
+          setSavedDatabases((prev) => [saved, ...prev]);
+          setSaveDbStatus({ type: 'success', message: `Successfully imported "${dbName}"!` });
+          setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3000);
+        }
+      } catch (err: any) {
+        console.error("Import database parse error:", err);
+        alert("Failed to import database file: " + err.message);
+      } finally {
+        // Reset file input value so same file can be imported again if needed
+        if (importFileInputRef.current) {
+          importFileInputRef.current.value = '';
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleResolveConflictMerge = async () => {
+    if (!importConflictData || !user) return;
+    const { dbName, diaries: importedDiaries, existingDb } = importConflictData;
+    setImportConflictData(null);
+    setSaveDbStatus({ type: 'loading', message: `Merging case records into "${dbName}"...` });
+    try {
+      const mergedDiaries = [...existingDb.diaries];
+      importedDiaries.forEach((newD: CaseDiary) => {
+        const idx = mergedDiaries.findIndex((d) => 
+          d.id === newD.id || 
+          ((d.crNoAndSecOfLaw || '').trim().toLowerCase() === (newD.crNoAndSecOfLaw || '').trim().toLowerCase() &&
+           (d.dateOfCd || '').trim().toLowerCase() === (newD.dateOfCd || '').trim().toLowerCase())
+        );
+        if (idx >= 0) {
+          // Merge keeping any custom modifications/fields if needed, or simply overwrite with imported values
+          mergedDiaries[idx] = { ...mergedDiaries[idx], ...newD };
+        } else {
+          mergedDiaries.push(newD);
+        }
+      });
+
+      const saved = await saveSavedDatabase(existingDb.name, mergedDiaries, user.uid, existingDb.id);
+      setSavedDatabases((prev) => prev.map(db => db.id === existingDb.id ? saved : db));
+      setSaveDbStatus({ type: 'success', message: `Successfully merged imported records into "${dbName}"!` });
+      setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3500);
+    } catch (err: any) {
+      console.error("Conflict merge error:", err);
+      setSaveDbStatus({ type: 'error', message: err.message || 'Failed to merge database.' });
+    }
+  };
+
+  const handleResolveConflictKeepBoth = async () => {
+    if (!importConflictData || !user) return;
+    const { dbName, diaries: importedDiaries } = importConflictData;
+    setImportConflictData(null);
+    
+    let uniqueName = `Copy of ${dbName}`;
+    let copyCounter = 1;
+    while (savedDatabases.some(db => db.name.toLowerCase() === uniqueName.toLowerCase())) {
+      copyCounter++;
+      uniqueName = `Copy of ${dbName} (${copyCounter})`;
+    }
+
+    setSaveDbStatus({ type: 'loading', message: `Saving imported database as "${uniqueName}"...` });
+    try {
+      const saved = await saveSavedDatabase(uniqueName, importedDiaries, user.uid);
+      setSavedDatabases((prev) => [saved, ...prev]);
+      setSaveDbStatus({ type: 'success', message: `Successfully saved as "${uniqueName}"!` });
+      setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3500);
+    } catch (err: any) {
+      console.error("Conflict keep both error:", err);
+      setSaveDbStatus({ type: 'error', message: err.message || 'Failed to import as new database.' });
     }
   };
 
@@ -2242,10 +2381,28 @@ export default function App() {
                       
                       <div className="flex items-center gap-2">
                         {supabaseStatus?.isConfigured && (
-                          <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                            Connected
-                          </span>
+                          <>
+                            <span className="hidden xs:flex items-center gap-1 text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                              Connected
+                            </span>
+                            <input
+                              type="file"
+                              accept=".json"
+                              ref={importFileInputRef}
+                              className="hidden"
+                              onChange={handleImportDatabase}
+                            />
+                            <button
+                              onClick={() => importFileInputRef.current?.click()}
+                              className="p-1.5 hover:bg-gray-150 dark:hover:bg-slate-800 rounded-xl transition-all border flex items-center gap-1 cursor-pointer text-[10.5px] font-bold"
+                              style={{ color: 'var(--th-primary)', borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}
+                              title="Import JSON Database Backup"
+                            >
+                              <FileUp className="w-3.5 h-3.5" />
+                              <span>Import DB</span>
+                            </button>
+                          </>
                         )}
                         <button
                           onClick={fetchSupabaseStatus}
@@ -2431,18 +2588,27 @@ export default function App() {
                                     })}
                                   </div>
 
-                                  {/* Danger Zone */}
-                                  {roleInfo.level === 'admin' && (
-                                    <div className="mt-4 pt-3 border-t flex justify-end" style={{ borderColor: 'var(--th-border)' }}>
+                                  {/* Accordion Actions & Danger Zone */}
+                                  <div className="mt-4 pt-3 border-t flex justify-between items-center" style={{ borderColor: 'var(--th-border)' }}>
+                                    <button
+                                      onClick={() => handleExportDatabase(dbItem)}
+                                      className="text-[10px] font-bold text-sky-650 hover:text-sky-850 hover:bg-sky-50 dark:hover:bg-slate-800 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-sky-200"
+                                      title="Export database case records as JSON backup"
+                                    >
+                                      <FileDown className="w-3.5 h-3.5 text-gray-400" />
+                                      Export DB Backup
+                                    </button>
+
+                                    {roleInfo.level === 'admin' && (
                                       <button
                                         onClick={() => handleDeleteDatabase(dbItem.id)}
-                                        className="text-[10px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-red-200"
+                                        className="text-[10px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-red-200"
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
                                         Delete Cloud DB
                                       </button>
-                                    </div>
-                                  )}
+                                    )}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -3408,6 +3574,70 @@ export default function App() {
             <Shield className="w-5 h-5" />
             Dashboard
           </button>
+        </div>
+      )}
+
+      {/* Import Database Conflict Resolution Modal */}
+      {importConflictData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md bg-black/40">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="w-full max-w-md rounded-3xl p-6 shadow-2xl border flex flex-col gap-4"
+            style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+          >
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-xl bg-amber-500/10 text-amber-500 shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-display font-semibold text-base" style={{ color: 'var(--th-text)' }}>
+                  Database Conflict Detected
+                </h3>
+                <p className="text-xs mt-1.5 leading-relaxed" style={{ color: 'var(--th-text3)' }}>
+                  A database named <strong className="font-mono text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-slate-800 px-1 py-0.5 rounded text-[11px]">{importConflictData.dbName}</strong> already exists. How would you like to proceed with the imported backup?
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-gray-50/50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-800 p-3.5 rounded-2xl text-[11px] font-medium leading-relaxed" style={{ color: 'var(--th-text4)' }}>
+              <div className="flex justify-between py-1 border-b border-gray-200/40">
+                <span>Existing Database:</span>
+                <span className="font-bold text-gray-850 dark:text-gray-150">{importConflictData.existingDb.diaries.length} records</span>
+              </div>
+              <div className="flex justify-between py-1 mt-1">
+                <span>Importing Backup:</span>
+                <span className="font-bold text-gray-850 dark:text-gray-150">{importConflictData.diaries.length} records</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5 mt-2">
+              <button
+                onClick={handleResolveConflictMerge}
+                className="w-full text-white text-xs font-bold py-2.5 px-4 rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
+              >
+                <Plus className="w-4 h-4" />
+                Merge Case Records (Update & Append)
+              </button>
+
+              <button
+                onClick={handleResolveConflictKeepBoth}
+                className="w-full bg-white border border-gray-250 hover:bg-gray-50 text-gray-700 text-xs font-bold py-2.5 px-4 rounded-xl shadow-2xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <FileUp className="w-4 h-4 text-gray-400" />
+                Keep Both (Rename Imported Database)
+              </button>
+
+              <button
+                onClick={() => setImportConflictData(null)}
+                className="w-full bg-transparent hover:bg-red-50 dark:hover:bg-red-950/20 text-red-500 hover:text-red-750 text-xs font-bold py-2.5 px-4 rounded-xl transition-all cursor-pointer border border-transparent hover:border-red-200"
+              >
+                Cancel Import
+              </button>
+            </div>
+          </motion.div>
         </div>
       )}
 
