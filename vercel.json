@@ -1,4 +1,14 @@
 {
+  "outputDirectory": "dist",
+  "builds": [
+    {
+      "src": "api/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["server.ts"]
+      }
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
