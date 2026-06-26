@@ -49,14 +49,14 @@ import { generateCaseDiaryDocx, generateMultipleCaseDiariesDocx } from './export
 import { exportDiariesToZip } from './exportZip';
 import { User } from 'firebase/auth';
 import { CaseDiary, Accused, SavedDatabase } from './types';
-import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase } from './dbHelper';
+import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase, getSavedDatabaseById } from './dbHelper';
 import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
 
 // Helper functions for IndexedDB storage to bypass localStorage 5MB quota limit on large datasets/PDF chunks
 function saveToIndexedDB(key: string, value: any): Promise<void> {
   return new Promise((resolve) => {
     try {
-      const request = indexedDB.open('GatewayRecoveryDB', 1);
+      const request = indexedDB.open('GatewayRecoveryDB', 2);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains('states')) {
@@ -65,6 +65,11 @@ function saveToIndexedDB(key: string, value: any): Promise<void> {
       };
       request.onsuccess = () => {
         const db = request.result;
+        if (!db.objectStoreNames.contains('states')) {
+          db.close();
+          resolve();
+          return;
+        }
         const transaction = db.transaction('states', 'readwrite');
         const store = transaction.objectStore('states');
         store.put(value, key);
@@ -90,7 +95,7 @@ function saveToIndexedDB(key: string, value: any): Promise<void> {
 function getFromIndexedDB(key: string): Promise<any> {
   return new Promise((resolve) => {
     try {
-      const request = indexedDB.open('GatewayRecoveryDB', 1);
+      const request = indexedDB.open('GatewayRecoveryDB', 2);
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains('states')) {
@@ -99,6 +104,11 @@ function getFromIndexedDB(key: string): Promise<any> {
       };
       request.onsuccess = () => {
         const db = request.result;
+        if (!db.objectStoreNames.contains('states')) {
+          db.close();
+          resolve(null);
+          return;
+        }
         const transaction = db.transaction('states', 'readonly');
         const store = transaction.objectStore('states');
         const getReq = store.get(key);
@@ -124,9 +134,20 @@ function getFromIndexedDB(key: string): Promise<any> {
 function removeFromIndexedDB(key: string): Promise<void> {
   return new Promise((resolve) => {
     try {
-      const request = indexedDB.open('GatewayRecoveryDB', 1);
+      const request = indexedDB.open('GatewayRecoveryDB', 2);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('states')) {
+          db.createObjectStore('states');
+        }
+      };
       request.onsuccess = () => {
         const db = request.result;
+        if (!db.objectStoreNames.contains('states')) {
+          db.close();
+          resolve();
+          return;
+        }
         const transaction = db.transaction('states', 'readwrite');
         const store = transaction.objectStore('states');
         store.delete(key);
@@ -362,6 +383,32 @@ export default function App() {
   const [isLoadingDbs, setIsLoadingDbs] = useState<boolean>(false);
   const [dbNameInput, setDbNameInput] = useState<string>('');
   const [selectedSavedDbId, setSelectedSavedDbId] = useState<string | null>(null);
+  const [loadingDbDiariesId, setLoadingDbDiariesId] = useState<string | null>(null);
+
+  const ensureDatabaseDiariesLoaded = async (dbId: string): Promise<SavedDatabase | null> => {
+    const db = savedDatabases.find(d => d.id === dbId);
+    if (!db) return null;
+
+    // Already loaded diaries?
+    if (db.diaries && db.diaries.length > 0) {
+      return db;
+    }
+
+    setLoadingDbDiariesId(dbId);
+    try {
+      const fullDb = await getSavedDatabaseById(dbId, user?.uid || '', user?.email || undefined);
+      if (fullDb) {
+        setSavedDatabases(prev => prev.map(d => d.id === dbId ? fullDb : d));
+        return fullDb;
+      }
+    } catch (err) {
+      console.error("Failed to load diaries for database:", dbId, err);
+    } finally {
+      setLoadingDbDiariesId(null);
+    }
+    return db;
+  };
+
   const [showSaveDbPrompt, setShowSaveDbPrompt] = useState<boolean>(false);
   const [saveDbStatus, setSaveDbStatus] = useState<{ type: 'success' | 'error' | 'loading' | null; message: string | null }>({ type: null, message: null });
   const [showSupaSetup, setShowSupaSetup] = useState<boolean>(false);
@@ -942,18 +989,20 @@ export default function App() {
     }
   };
 
-  const handleExportDatabase = (dbItem: SavedDatabase) => {
+  const handleExportDatabase = async (dbItem: SavedDatabase) => {
     try {
+      const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
+      if (!loadedDb) return;
       const backupData = {
-        name: dbItem.name,
-        diaries: dbItem.diaries
+        name: loadedDb.name,
+        diaries: loadedDb.diaries || []
       };
       const jsonString = JSON.stringify(backupData, null, 2);
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      const safeName = dbItem.name.replace(/[\/\\?%*:|"<>]/g, '_');
+      const safeName = loadedDb.name.replace(/[\/\\?%*:|"<>]/g, '_');
       link.download = `${safeName || 'Database'}_backup.json`;
       document.body.appendChild(link);
       link.click();
@@ -1024,7 +1073,8 @@ export default function App() {
     setImportConflictData(null);
     setSaveDbStatus({ type: 'loading', message: `Merging case records into "${dbName}"...` });
     try {
-      const mergedDiaries = [...existingDb.diaries];
+      const loadedDb = await ensureDatabaseDiariesLoaded(existingDb.id);
+      const mergedDiaries = [...(loadedDb?.diaries || [])];
       importedDiaries.forEach((newD: CaseDiary) => {
         const idx = mergedDiaries.findIndex((d) => 
           d.id === newD.id || 
@@ -1100,8 +1150,10 @@ export default function App() {
     }
   };
 
-  const handleLoadSelectedCases = (dbItem: SavedDatabase) => {
-    const selectedDiaries = dbItem.diaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
+  const handleLoadSelectedCases = async (dbItem: SavedDatabase) => {
+    const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
+    if (!loadedDb || !loadedDb.diaries) return;
+    const selectedDiaries = loadedDb.diaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
     if (selectedDiaries.length > 0) {
       setDiaries(selectedDiaries);
       setSelectedDiaryId(selectedDiaries[0].id);
@@ -1113,10 +1165,11 @@ export default function App() {
     }
   };
 
-  const handleViewDatabaseDraft = (dbItem: SavedDatabase) => {
-    if (dbItem.diaries && dbItem.diaries.length > 0) {
-      setDiaries(dbItem.diaries);
-      setSelectedDiaryId(dbItem.diaries[0].id);
+  const handleViewDatabaseDraft = async (dbItem: SavedDatabase) => {
+    const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
+    if (loadedDb && loadedDb.diaries && loadedDb.diaries.length > 0) {
+      setDiaries(loadedDb.diaries);
+      setSelectedDiaryId(loadedDb.diaries[0].id);
       setLoadedDbId(dbItem.id);
       setLoadedDbName(dbItem.name);
       setIsSaved(true);
@@ -1177,7 +1230,7 @@ export default function App() {
         const targetDb = savedDatabases.find(db => db.id === dbId);
         if (!targetDb) return;
         
-        const updatedDiaries = targetDb.diaries.filter(d => d.id !== diaryId);
+        const updatedDiaries = (targetDb.diaries || []).filter(d => d.id !== diaryId);
         
         if (updatedDiaries.length === 0) {
           await deleteSavedDatabase(dbId, user.uid);
@@ -1204,17 +1257,20 @@ export default function App() {
     }
   };
 
-  const handleEditDiaryFromDatabase = (dbItem: SavedDatabase, diaryId: string, e?: React.MouseEvent) => {
+  const handleEditDiaryFromDatabase = async (dbItem: SavedDatabase, diaryId: string, e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    setDiaries(dbItem.diaries);
-    setSelectedDiaryId(diaryId);
-    setLoadedDbId(dbItem.id);
-    setLoadedDbName(dbItem.name);
-    setIsSaved(true);
-    setActiveTab('editor');
+    const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
+    if (loadedDb && loadedDb.diaries) {
+      setDiaries(loadedDb.diaries);
+      setSelectedDiaryId(diaryId);
+      setLoadedDbId(dbItem.id);
+      setLoadedDbName(dbItem.name);
+      setIsSaved(true);
+      setActiveTab('editor');
+    }
   };
 
   const handleDeleteWorkspaceDiary = (diaryId: string, e?: React.MouseEvent) => {
@@ -2544,7 +2600,7 @@ export default function App() {
                           });
                           
                           // Check if any cases are selected in this specific database
-                          const selectedInThisDb = dbItem.diaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
+                          const selectedInThisDb = (dbItem.diaries || []).filter(d => selectedDatabaseCaseIds.includes(d.id));
 
                           return (
                             <div 
@@ -2561,9 +2617,13 @@ export default function App() {
                             >
                               {/* Database Header (Clickable to toggle expand) */}
                               <div 
-                                onClick={() => {
-                                  setSelectedSavedDbId(isExpanded ? null : dbItem.id);
+                                onClick={async () => {
+                                  const nextExpanded = !isExpanded;
+                                  setSelectedSavedDbId(nextExpanded ? dbItem.id : null);
                                   setSelectedDatabaseCaseIds([]); // Clear selection when toggling
+                                  if (nextExpanded) {
+                                    await ensureDatabaseDiariesLoaded(dbItem.id);
+                                  }
                                 }}
                                 className="p-4 flex items-center justify-between cursor-pointer gap-2"
                               >
@@ -2572,7 +2632,9 @@ export default function App() {
                                     <Database className="w-4 h-4 shrink-0" style={{ color: 'var(--th-primary)' }} />
                                     {dbItem.name}
                                   </h4>
-                                  <p className="text-[10px] mt-0.5 font-medium" style={{ color: 'var(--th-text4)' }}>{formattedDate} • {dbItem.diaries.length} records</p>
+                                  <p className="text-[10px] mt-0.5 font-medium" style={{ color: 'var(--th-text4)' }}>
+                                    {formattedDate} • {dbItem.diaryCount ?? dbItem.diaries?.length ?? 0} records
+                                  </p>
                                 </div>
                                 <ChevronDown className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} style={{ color: 'var(--th-text4)' }} />
                               </div>
@@ -2580,123 +2642,132 @@ export default function App() {
                               {/* Expanded content */}
                               {isExpanded && (
                                 <div className="px-4 pb-4 border-t pt-3.5 rounded-b-2xl" style={{ borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}>
-                                  {/* Action row */}
-                                  <div className="flex flex-col sm:flex-row gap-2.5 mb-4">
-                                    <button
-                                      onClick={() => handleViewDatabaseDraft(dbItem)}
-                                      className="flex-1 text-white text-xs font-bold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
-                                      style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
-                                    >
-                                      <Layers className="w-4 h-4" />
-                                      Load Full Database to Workspace
-                                    </button>
-                                    <button
-                                      onClick={() => handleDownloadAllDocx(dbItem.diaries, dbItem.name)}
-                                      className="bg-white border border-gray-200 text-gray-700 text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all hover:bg-gray-50"
-                                    >
-                                      <FileDown className="w-4 h-4 text-gray-400" />
-                                      Export All to Word
-                                    </button>
-                                  </div>
-
-                                  {/* Cases List */}
-                                  <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                      <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Extracted Case Numbers</p>
-                                      {selectedInThisDb.length > 0 && (
-                                        <button
-                                          onClick={() => handleLoadSelectedCases(dbItem)}
-                                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold py-1 px-2.5 rounded-lg flex items-center gap-1 cursor-pointer transition-all shadow-xs"
-                                        >
-                                          <Play className="w-3 h-3" />
-                                          Load Selected Cases ({selectedInThisDb.length})
-                                        </button>
-                                      )}
+                                  {loadingDbDiariesId === dbItem.id ? (
+                                    <div className="flex flex-col items-center justify-center py-8">
+                                      <RefreshCw className="w-5 h-5 animate-spin" style={{ color: 'var(--th-primary)' }} />
+                                      <p className="text-[11px] mt-2 font-semibold" style={{ color: 'var(--th-text3)' }}>Loading database case records...</p>
                                     </div>
-                                    {dbItem.diaries.map((diary) => {
-                                      const isChecked = selectedDatabaseCaseIds.includes(diary.id);
-                                      return (
-                                        <div 
-                                          key={diary.id} 
-                                          className="flex items-center justify-between p-3 border rounded-xl gap-3 transition-all cursor-pointer"
-                                          style={{ 
-                                            borderColor: isChecked ? 'var(--th-primary)' : 'var(--th-border2)', 
-                                            background: isChecked ? 'var(--th-primary-xlight)' : 'var(--th-surface2)' 
-                                          }}
-                                          onClick={() => {
-                                            setSelectedDatabaseCaseIds(prev => {
-                                              if (prev.includes(diary.id)) {
-                                                return prev.filter(id => id !== diary.id);
-                                              } else {
-                                                return [...prev, diary.id];
-                                              }
-                                            });
-                                          }}
+                                  ) : (
+                                    <>
+                                      {/* Action row */}
+                                      <div className="flex flex-col sm:flex-row gap-2.5 mb-4">
+                                        <button
+                                          onClick={() => handleViewDatabaseDraft(dbItem)}
+                                          className="flex-1 text-white text-xs font-bold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                                          style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
                                         >
-                                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                            <input
-                                              type="checkbox"
-                                              checked={isChecked}
-                                              readOnly
-                                              className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer shrink-0"
-                                            />
-                                            <div className="min-w-0 flex-1">
-                                              <p className="text-xs font-bold truncate" style={{ color: 'var(--th-text)' }}>{diary.crNoAndSecOfLaw || 'Case Record'}</p>
-                                              <p className="text-[10px] truncate" style={{ color: 'var(--th-text4)' }}>{diary.policeStation}</p>
-                                            </div>
-                                          </div>
-                                          
-                                          <div className="flex items-center gap-2 shrink-0">
-                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-md" style={{ color: 'var(--th-primary)', background: 'var(--th-surface)' }}>{diary.dateOfCd}</span>
-                                            
-                                            {/* Edit individual record button */}
+                                          <Layers className="w-4 h-4" />
+                                          Load Full Database to Workspace
+                                        </button>
+                                        <button
+                                          onClick={() => handleDownloadAllDocx(dbItem.diaries || [], dbItem.name)}
+                                          className="bg-white border border-gray-200 text-gray-700 text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all hover:bg-gray-50"
+                                        >
+                                          <FileDown className="w-4 h-4 text-gray-400" />
+                                          Export All to Word
+                                        </button>
+                                      </div>
+
+                                      {/* Cases List */}
+                                      <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                          <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Extracted Case Numbers</p>
+                                          {selectedInThisDb.length > 0 && (
                                             <button
-                                              onClick={(e) => handleEditDiaryFromDatabase(dbItem, diary.id, e)}
-                                              className="p-1.5 rounded-lg transition-colors border shadow-2xs hover:bg-gray-50 bg-white"
-                                              style={{ color: 'var(--th-text3)', borderColor: 'var(--th-border)' }}
-                                              title="Edit individual case record in workspace"
+                                              onClick={() => handleLoadSelectedCases(dbItem)}
+                                              className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold py-1 px-2.5 rounded-lg flex items-center gap-1 cursor-pointer transition-all shadow-xs"
                                             >
-                                              <Edit3 className="w-3.5 h-3.5" />
+                                              <Play className="w-3 h-3" />
+                                              Load Selected Cases ({selectedInThisDb.length})
                                             </button>
-
-                                            {/* Delete individual record button */}
-                                            {roleInfo.level === 'admin' && (
-                                              <button
-                                                onClick={(e) => handleDeleteDiaryFromDatabase(dbItem.id, diary.id, e)}
-                                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 transition-colors border shadow-2xs bg-white"
-                                                style={{ borderColor: 'var(--th-border)' }}
-                                                title="Delete individual case record from database"
-                                              >
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                              </button>
-                                            )}
-                                          </div>
+                                          )}
                                         </div>
-                                      );
-                                    })}
-                                  </div>
+                                        {(dbItem.diaries || []).map((diary) => {
+                                          const isChecked = selectedDatabaseCaseIds.includes(diary.id);
+                                          return (
+                                            <div 
+                                              key={diary.id} 
+                                              className="flex items-center justify-between p-3 border rounded-xl gap-3 transition-all cursor-pointer"
+                                              style={{ 
+                                                borderColor: isChecked ? 'var(--th-primary)' : 'var(--th-border2)', 
+                                                background: isChecked ? 'var(--th-primary-xlight)' : 'var(--th-surface2)' 
+                                              }}
+                                              onClick={() => {
+                                                setSelectedDatabaseCaseIds(prev => {
+                                                  if (prev.includes(diary.id)) {
+                                                    return prev.filter(id => id !== diary.id);
+                                                  } else {
+                                                    return [...prev, diary.id];
+                                                  }
+                                                });
+                                              }}
+                                            >
+                                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={isChecked}
+                                                  readOnly
+                                                  className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer shrink-0"
+                                                />
+                                                <div className="min-w-0 flex-1">
+                                                  <p className="text-xs font-bold truncate" style={{ color: 'var(--th-text)' }}>{diary.crNoAndSecOfLaw || 'Case Record'}</p>
+                                                  <p className="text-[10px] truncate" style={{ color: 'var(--th-text4)' }}>{diary.policeStation}</p>
+                                                </div>
+                                              </div>
+                                              
+                                              <div className="flex-shrink-0 flex items-center gap-2">
+                                                <span className="text-[9px] font-bold px-2 py-0.5 rounded-md" style={{ color: 'var(--th-primary)', background: 'var(--th-surface)' }}>{diary.dateOfCd}</span>
+                                                
+                                                {/* Edit individual record button */}
+                                                <button
+                                                  onClick={(e) => handleEditDiaryFromDatabase(dbItem, diary.id, e)}
+                                                  className="p-1.5 rounded-lg transition-colors border shadow-2xs hover:bg-gray-50 bg-white"
+                                                  style={{ color: 'var(--th-text3)', borderColor: 'var(--th-border)' }}
+                                                  title="Edit individual case record in workspace"
+                                                >
+                                                  <Edit3 className="w-3.5 h-3.5" />
+                                                </button>
 
-                                  {/* Accordion Actions & Danger Zone */}
-                                  <div className="mt-4 pt-3 border-t flex justify-between items-center" style={{ borderColor: 'var(--th-border)' }}>
-                                    <button
-                                      onClick={() => handleExportDatabase(dbItem)}
-                                      className="text-[10px] font-bold text-sky-650 hover:text-sky-850 hover:bg-sky-50 dark:hover:bg-slate-800 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-sky-200"
-                                      title="Export database case records as JSON backup"
-                                    >
-                                      <FileDown className="w-3.5 h-3.5 text-gray-400" />
-                                      Export DB Backup
-                                    </button>
+                                                {/* Delete individual record button */}
+                                                {roleInfo.level === 'admin' && (
+                                                  <button
+                                                    onClick={(e) => handleDeleteDiaryFromDatabase(dbItem.id, diary.id, e)}
+                                                    className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 transition-colors border shadow-2xs bg-white"
+                                                    style={{ borderColor: 'var(--th-border)' }}
+                                                    title="Delete individual case record from database"
+                                                  >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                  </button>
+                                                )}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
 
-                                    {roleInfo.level === 'admin' && (
-                                      <button
-                                        onClick={() => handleDeleteDatabase(dbItem.id)}
-                                        className="text-[10px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-red-200"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                        Delete Cloud DB
-                                      </button>
-                                    )}
-                                  </div>
+                                      {/* Accordion Actions & Danger Zone */}
+                                      <div className="mt-4 pt-3 border-t flex justify-between items-center" style={{ borderColor: 'var(--th-border)' }}>
+                                        <button
+                                          onClick={() => handleExportDatabase(dbItem)}
+                                          className="text-[10px] font-bold text-sky-650 hover:text-sky-850 hover:bg-sky-50 dark:hover:bg-slate-800 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-sky-200"
+                                          title="Export database case records as JSON backup"
+                                        >
+                                          <FileDown className="w-3.5 h-3.5 text-gray-400" />
+                                          Export DB Backup
+                                        </button>
+
+                                        {roleInfo.level === 'admin' && (
+                                          <button
+                                            onClick={() => handleDeleteDatabase(dbItem.id)}
+                                            className="text-[10px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-red-200"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            Delete Cloud DB
+                                          </button>
+                                        )}
+                                      </div>
+                                    </>
+                                  )}
                                 </div>
                               )}
                             </div>

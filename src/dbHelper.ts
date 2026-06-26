@@ -128,3 +128,40 @@ export async function deleteSavedDatabase(id: string, userId: string): Promise<v
     console.warn("Could not sync deletion with server (server offline/unconfigured), deleted locally.", err);
   }
 }
+
+// Fetch a single database with its full diaries array (checking access control)
+export async function getSavedDatabaseById(id: string, userId: string, email?: string): Promise<SavedDatabase | null> {
+  const localDbs = getLocalDatabases(userId);
+  const localDb = localDbs.find((db) => db.id === id);
+  
+  // If the local cache already has the full diaries list, return it
+  if (localDb && Array.isArray(localDb.diaries) && localDb.diaries.length > 0) {
+    return localDb;
+  }
+
+  // Otherwise, fetch from server
+  try {
+    let url = `/api/db/get?id=${encodeURIComponent(id)}&userId=${encodeURIComponent(userId)}`;
+    if (email) {
+      url += `&email=${encodeURIComponent(email)}`;
+    }
+    const response = await fetch(url);
+    if (response.ok) {
+      const result = await response.json();
+      if (result.success && result.database) {
+        const fullDb: SavedDatabase = result.database;
+        
+        // Cache the fully fetched database locally in browser
+        const updatedLocal = localDbs.filter((db) => db.id !== fullDb.id);
+        updatedLocal.push(fullDb);
+        saveLocalDatabases(userId, updatedLocal);
+        
+        return fullDb;
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to fetch database by ID (${id}) from server:`, err);
+  }
+
+  return localDb || null;
+}

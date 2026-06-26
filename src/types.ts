@@ -42,5 +42,6 @@ export interface SavedDatabase {
   userId: string;
   name: string;
   createdAt: number;
-  diaries: CaseDiary[];
+  diaries?: CaseDiary[];
+  diaryCount?: number;
 }

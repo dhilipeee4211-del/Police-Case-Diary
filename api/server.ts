@@ -784,9 +784,16 @@ app.get('/api/db/list', async (req, res) => {
 
     if (!supabaseServerClient) {
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
+      const dbsForClient = localDbs.map((db: any) => ({
+        id: db.id,
+        userId: db.userId,
+        name: db.name,
+        createdAt: db.createdAt,
+        diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
+      }));
       return res.json({ 
         success: true, 
-        databases: localDbs, 
+        databases: dbsForClient, 
         source: 'disk',
         error: null 
       });
@@ -856,19 +863,120 @@ app.get('/api/db/list', async (req, res) => {
 
         finalDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
         console.log(`Loaded ${finalDbs.length} databases (merged Supabase and local cache) for user ${userId} (${userEmail})`);
-        return res.json({ success: true, databases: finalDbs, source: 'supabase_merged' });
+        
+        const dbsForClient = finalDbs.map((db: any) => ({
+          id: db.id,
+          userId: db.userId,
+          name: db.name,
+          createdAt: db.createdAt,
+          diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
+        }));
+        return res.json({ success: true, databases: dbsForClient, source: 'supabase_merged' });
       }
 
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      return res.json({ success: true, databases: localDbs, source: 'disk' });
+      const dbsForClient = localDbs.map((db: any) => ({
+        id: db.id,
+        userId: db.userId,
+        name: db.name,
+        createdAt: db.createdAt,
+        diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
+      }));
+      return res.json({ success: true, databases: dbsForClient, source: 'disk' });
     } catch (err: any) {
       console.log('Supabase fetch exception, falling back to disk:', err);
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      return res.json({ success: true, databases: localDbs, source: 'disk', error: err.message });
+      const dbsForClient = localDbs.map((db: any) => ({
+        id: db.id,
+        userId: db.userId,
+        name: db.name,
+        createdAt: db.createdAt,
+        diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
+      }));
+      return res.json({ success: true, databases: dbsForClient, source: 'disk', error: err.message });
     }
   } catch (err) {
     console.error('Error in /api/db/list:', err);
     return res.status(500).json({ error: 'Failed to retrieve databases' });
+  }
+});
+
+// Endpoint: Get a single database with its full diaries array (checking permissions)
+app.get('/api/db/get', async (req, res) => {
+  try {
+    const { id, userId, email } = req.query;
+    if (!id || !userId) {
+      return res.status(400).json({ error: 'Missing id or userId parameter' });
+    }
+
+    const userEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    const isAdmin = userEmail === 'dhilipeee4211@gmail.com';
+    const accessMap = readAccessMap();
+    const allowedDbIds = accessMap[userEmail] || [];
+
+    // Check if the user is allowed to access this database
+    const isAllowed = isAdmin || allowedDbIds.includes(id as string);
+
+    // Try finding in local disk first
+    const allDbs = readServerDatabases();
+    const diskDb = allDbs.find((db: any) => db.id === id);
+
+    if (diskDb) {
+      if (!isAllowed && diskDb.userId !== userId) {
+        return res.status(403).json({ error: 'Access denied. You do not have permissions for this database.' });
+      }
+      return res.json({ success: true, database: diskDb, source: 'disk' });
+    }
+
+    if (!supabaseServerClient) {
+      return res.status(404).json({ error: 'Database not found on local server.' });
+    }
+
+    // Try finding in Supabase
+    try {
+      const { data, error } = await withTimeout(
+        supabaseServerClient
+          .from('case_databases')
+          .select('*')
+          .eq('id', id)
+          .single(),
+        3500,
+        'Supabase fetch database query timed out'
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        if (!isAllowed && data.user_id !== userId) {
+          return res.status(403).json({ error: 'Access denied. You do not have permissions for this database.' });
+        }
+
+        const mappedDb = {
+          id: data.id,
+          userId: data.user_id,
+          name: data.name,
+          createdAt: Number(data.created_at),
+          diaries: typeof data.diaries === 'string' ? JSON.parse(data.diaries) : data.diaries,
+        };
+
+        // Cache locally on disk for future fast access
+        const restDbs = allDbs.filter((db: any) => db.id !== mappedDb.id);
+        restDbs.push(mappedDb);
+        writeServerDatabases(restDbs);
+
+        return res.json({ success: true, database: mappedDb, source: 'supabase' });
+      }
+
+      return res.status(404).json({ error: 'Database not found.' });
+    } catch (supaErr: any) {
+      console.log('Supabase single fetch error:', supaErr);
+      return res.status(500).json({ error: 'Failed to retrieve database: ' + (supaErr.message || String(supaErr)) });
+    }
+  } catch (err: any) {
+    console.error('Error in /api/db/get:', err);
+    return res.status(500).json({ error: 'Failed to retrieve database' });
   }
 });
 
