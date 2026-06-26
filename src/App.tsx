@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   FileText, 
   UploadCloud, 
@@ -197,10 +197,11 @@ export default function App() {
   const [needsAuth, setNeedsAuth] = useState<boolean>(true);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [sessionExpiredMsg, setSessionExpiredMsg] = useState<string | null>(null);
   
   // Custom Selection Checkbox States
   const [selectedSearchCaseIds, setSelectedSearchCaseIds] = useState<{ dbId: string; diaryId: string }[]>([]);
-  const [selectedWorkspaceCaseIds, setSelectedWorkspaceCaseIds] = useState<string[]>([]);
+  const [selectedDatabaseCaseIds, setSelectedDatabaseCaseIds] = useState<string[]>([]);
 
   // Day / Night Theme State
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -248,11 +249,11 @@ export default function App() {
     chunkSize: number;
     startPageOffset: number;
   } | null>(null);
-  const [showWorkspaceSearch, setShowWorkspaceSearch] = useState<boolean>(false);
-  const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState<string>('');
 
   // Workspace States
   const [diaries, setDiaries] = useState<CaseDiary[]>([]);
+  const [lastExtractedDiaries, setLastExtractedDiaries] = useState<CaseDiary[]>([]);
+  const [gatewayDbName, setGatewayDbName] = useState<string>('');
   const [selectedDiaryId, setSelectedDiaryId] = useState<string | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -265,7 +266,6 @@ export default function App() {
   const [selectedSavedDbId, setSelectedSavedDbId] = useState<string | null>(null);
   const [showSaveDbPrompt, setShowSaveDbPrompt] = useState<boolean>(false);
   const [saveDbStatus, setSaveDbStatus] = useState<{ type: 'success' | 'error' | 'loading' | null; message: string | null }>({ type: null, message: null });
-  const [sidebarTab, setSidebarTab] = useState<'workspace' | 'history'>('workspace');
   const [showSupaSetup, setShowSupaSetup] = useState<boolean>(false);
   const [supabaseStatus, setSupabaseStatus] = useState<{
     isConfigured: boolean;
@@ -416,6 +416,82 @@ export default function App() {
   const toggleRemarksVoiceTyping = () => toggleVoiceTyping('remarks');
 
 
+  // 10-minute Inactivity Timer logic
+  const inactivityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const resetInactivityTimer = useCallback(() => {
+    if (!user) return;
+    if (inactivityTimeoutRef.current) {
+      clearTimeout(inactivityTimeoutRef.current);
+    }
+    inactivityTimeoutRef.current = setTimeout(async () => {
+      try {
+        localStorage.removeItem("guest_session_active");
+        localStorage.removeItem("login_timestamp");
+        await logout();
+        setUser(null);
+        setToken(null);
+        setNeedsAuth(true);
+        setDiaries([]);
+        setSelectedDiaryId(null);
+        setSavedDatabases([]);
+        setSessionExpiredMsg("Session expired due to inactivity");
+      } catch (err) {
+        console.error("Auto logout error:", err);
+      }
+    }, 10 * 60 * 1000); // 10 minutes
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      if (inactivityTimeoutRef.current) {
+        clearTimeout(inactivityTimeoutRef.current);
+      }
+      return;
+    }
+
+    resetInactivityTimer();
+
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'visibilitychange'];
+    const handleActivity = () => resetInactivityTimer();
+
+    events.forEach(event => {
+      window.addEventListener(event, handleActivity);
+    });
+
+    return () => {
+      events.forEach(event => {
+        window.removeEventListener(event, handleActivity);
+      });
+      if (inactivityTimeoutRef.current) {
+        clearTimeout(inactivityTimeoutRef.current);
+      }
+    };
+  }, [user, resetInactivityTimer]);
+
+  // 7-day Max Session Lifetime check
+  useEffect(() => {
+    const checkMaxSession = async () => {
+      const loginTimeStr = localStorage.getItem("login_timestamp");
+      if (loginTimeStr) {
+        const loginTime = parseInt(loginTimeStr, 10);
+        if (Date.now() - loginTime > 7 * 24 * 60 * 60 * 1000) {
+          localStorage.removeItem("login_timestamp");
+          localStorage.removeItem("guest_session_active");
+          await logout();
+          setUser(null);
+          setToken(null);
+          setNeedsAuth(true);
+          setDiaries([]);
+          setSelectedDiaryId(null);
+          setSavedDatabases([]);
+          setSessionExpiredMsg("Session expired (7-day maximum lifetime reached). Please sign in again.");
+        }
+      }
+    };
+    checkMaxSession();
+  }, []);
+
   // Initialize Auth state on load
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -434,6 +510,10 @@ export default function App() {
         setUser(currentUser);
         setToken(accessToken);
         setNeedsAuth(false);
+        setSessionExpiredMsg(null);
+        if (!localStorage.getItem("login_timestamp")) {
+          localStorage.setItem("login_timestamp", Date.now().toString());
+        }
       },
       () => {
         setUser(null);
@@ -447,6 +527,7 @@ export default function App() {
   const handleLogin = async () => {
     setIsLoggingIn(true);
     setAuthError(null);
+    setSessionExpiredMsg(null);
     try {
       const result = await googleSignIn();
       if (result && result.user && result.user.email) {
@@ -462,6 +543,7 @@ export default function App() {
         setUser(result.user);
         setToken(result.accessToken);
         setNeedsAuth(false);
+        localStorage.setItem("login_timestamp", Date.now().toString());
       }
     } catch (err: any) {
       console.error('Login error:', err);
@@ -472,19 +554,19 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    if (window.confirm('Are you sure you want to sign out? Your session history will be cleared.')) {
-      try {
-        localStorage.removeItem("guest_session_active");
-        await logout();
-        setUser(null);
-        setToken(null);
-        setNeedsAuth(true);
-        setDiaries([]);
-        setSelectedDiaryId(null);
-        setSavedDatabases([]);
-      } catch (err) {
-        console.error('Logout error:', err);
-      }
+    try {
+      localStorage.removeItem("guest_session_active");
+      localStorage.removeItem("login_timestamp");
+      await logout();
+      setUser(null);
+      setToken(null);
+      setNeedsAuth(true);
+      setDiaries([]);
+      setSelectedDiaryId(null);
+      setSavedDatabases([]);
+      setSessionExpiredMsg(null);
+    } catch (err) {
+      console.error('Logout error:', err);
     }
   };
 
@@ -673,13 +755,62 @@ export default function App() {
         setLoadedDbName(saved.name);
       }
       setShowSaveDbPrompt(false);
-      setSidebarTab('history');
       setTimeout(() => {
         setSaveDbStatus({ type: null, message: null });
       }, 3500);
     } catch (err: any) {
       console.error('Save to database error:', err);
       setSaveDbStatus({ type: 'error', message: err.message || 'Failed to save to database.' });
+    }
+  };
+
+  const handleSaveGatewayToDatabase = async () => {
+    if (!user) return;
+    const dbName = gatewayDbName.trim() || `Database - Extracted ${Date.now()}`;
+    setSaveDbStatus({ type: 'loading', message: 'Saving extracted database to Cloud...' });
+    try {
+      const saved = await saveSavedDatabase(dbName, lastExtractedDiaries, user.uid);
+      setSavedDatabases((prev) => [saved, ...prev]);
+      setSaveDbStatus({ type: 'success', message: `Successfully saved as "${dbName}"!` });
+      setTimeout(() => {
+        setSaveDbStatus({ type: null, message: null });
+      }, 3500);
+    } catch (err: any) {
+      console.error('Save to database error:', err);
+      setSaveDbStatus({ type: 'error', message: err.message || 'Failed to save to database.' });
+    }
+  };
+
+  const handleViewGatewayInWorkspace = () => {
+    if (lastExtractedDiaries.length > 0) {
+      setDiaries((prev) => {
+        const combined = [...prev, ...lastExtractedDiaries];
+        const seenKeys = new Set<string>();
+        const filtered: CaseDiary[] = [];
+        combined.forEach((diary) => {
+          const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            filtered.push(diary);
+          }
+        });
+        return filtered;
+      });
+      setSelectedDiaryId(lastExtractedDiaries[0].id);
+      setActiveTab('editor');
+    }
+  };
+
+  const handleLoadSelectedCases = (dbItem: SavedDatabase) => {
+    const selectedDiaries = dbItem.diaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
+    if (selectedDiaries.length > 0) {
+      setDiaries(selectedDiaries);
+      setSelectedDiaryId(selectedDiaries[0].id);
+      setLoadedDbId(dbItem.id);
+      setLoadedDbName(dbItem.name);
+      setIsSaved(true);
+      setSelectedDatabaseCaseIds([]);
+      setActiveTab('editor');
     }
   };
 
@@ -690,7 +821,6 @@ export default function App() {
       setLoadedDbId(dbItem.id);
       setLoadedDbName(dbItem.name);
       setIsSaved(true);
-      setSidebarTab('workspace');
       setActiveTab('editor');
     } else {
       alert("This saved database contains no diary entries.");
@@ -785,7 +915,6 @@ export default function App() {
     setLoadedDbId(dbItem.id);
     setLoadedDbName(dbItem.name);
     setIsSaved(true);
-    setSidebarTab('workspace');
     setActiveTab('editor');
   };
 
@@ -842,7 +971,6 @@ export default function App() {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         setSelectedFile(file);
         setConversionError(null);
-        setActiveTab('editor');
       } else {
         setConversionError('Please upload a valid PDF document.');
       }
@@ -855,7 +983,6 @@ export default function App() {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         setSelectedFile(file);
         setConversionError(null);
-        setActiveTab('editor');
       } else {
         setConversionError('Please upload a valid PDF document.');
       }
@@ -922,6 +1049,19 @@ export default function App() {
       return filtered;
     });
     
+    setLastExtractedDiaries(prev => {
+      const combined = [...prev, ...rawDiaries];
+      const seenKeys = new Set<string>();
+      const filtered: CaseDiary[] = [];
+      combined.forEach((diary) => {
+        const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          filtered.push(diary);
+        }
+      });
+      return filtered;
+    });
     setIsSaved(false);
   };
 
@@ -1083,6 +1223,8 @@ export default function App() {
     setConversionError(null);
     setExtractionProgress(5);
     setExtractionLogs([]);
+    setLastExtractedDiaries([]);
+    setGatewayDbName('');
 
     addLocalLog('Starting case diary reconstruction pipeline...', 'SYSTEM');
     addLocalLog(`Target file: "${selectedFile.name}" (${(selectedFile.size / 1024).toFixed(1)} KB)`, 'SYSTEM');
@@ -1314,6 +1456,30 @@ export default function App() {
       setIsBulkExporting(false);
     }
   };
+
+  const handleExportAllToZip = async () => {
+    if (diaries.length === 0) {
+      alert("No case diaries loaded in the workspace to export.");
+      return;
+    }
+
+    setIsBulkExporting(true);
+    try {
+      const blob = await exportDiariesToZip(diaries);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Workspace_Case_Diaries_${Date.now()}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(`Could not compile ZIP export: ${err.message}`);
+    } finally {
+      setIsBulkExporting(false);
+    }
+  };
   const roleInfo = getUserRole(user?.email);
 
   return (
@@ -1498,6 +1664,13 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {sessionExpiredMsg && (
+                  <div className="mb-6 p-3 rounded-xl flex items-start gap-2.5 text-xs" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)', border: '1px solid var(--th-border)' }}>
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{sessionExpiredMsg}</span>
+                  </div>
+                )}
 
                 {authError && (
                   <div className="mb-6 p-3 rounded-xl flex items-start gap-2.5 text-xs" style={{ background: 'var(--th-error-bg)', color: 'var(--th-error)', border: '1px solid var(--th-error-border)' }}>
@@ -1717,650 +1890,6 @@ export default function App() {
                       </motion.div>
                     )}
                   </div>
-                </div>
-              )}
-
-              {activeTab === 'records' && (
-                <div className="max-w-3xl mx-auto w-full flex flex-col gap-6">
-                  {/* Tabbed Record Selector & Database Library */}
-                  <div className="backdrop-blur-md rounded-3xl p-6 shadow-sm border flex-1 flex flex-col min-h-[420px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)', boxShadow: 'var(--th-card-shadow)' }}>
-                    {/* Tab Headers */}
-                    <div className="flex items-center border-b mb-4 p-1.5 rounded-xl gap-0.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                      <button
-                        onClick={() => setSidebarTab('workspace')}
-                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer`}
-                        style={sidebarTab === 'workspace' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', border: '1px solid var(--th-border)' } : { color: 'var(--th-text4)' }}
-                      >
-                        <Layers className="w-3.5 h-3.5" />
-                        Workspace ({diaries.length})
-                      </button>
-                      <button
-                        onClick={() => setSidebarTab('history')}
-                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer relative`}
-                        style={sidebarTab === 'history' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', border: '1px solid var(--th-border)' } : { color: 'var(--th-text4)' }}
-                      >
-                        <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--th-primary)' }} />
-                        Supabase Cloud DB ({savedDatabases.length})
-                        {supabaseStatus?.isConfigured && (
-                          <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                        )}
-                      </button>
-                    </div>
-
-                    {sidebarTab === 'workspace' && (
-                      <div className="flex-1 flex flex-col">
-                        <div className="flex items-center justify-between mb-3.5">
-                          <h3 className="font-display font-semibold text-xs flex items-center gap-1.5" style={{ color: 'var(--th-text)' }}>
-                            <ListFilter className="w-3.5 h-3.5" style={{ color: 'var(--th-primary)' }} />
-                            Reconstructed Records
-                          </h3>
-                          
-                          {diaries.length > 0 && (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                onClick={handleMarkAllAsSaved}
-                                className="text-[9px] font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer"
-                                style={{ color: 'var(--th-primary)', background: 'var(--th-primary-xlight)' }}
-                                title="Mark all current cases as saved drafts"
-                              >
-                                Mark Saved
-                              </button>
-                              <button
-                                onClick={() => {
-                                  const firstDiary = diaries[0];
-                                  const crimeNo = (firstDiary.crNoAndSecOfLaw || 'Diary').split(',')[0].replace(/[\/\\?%*:|"<>]/g, '-').trim();
-                                  const station = firstDiary.policeStation || 'Record';
-                                  setDbNameInput(`Database - CR No ${crimeNo} - ${station}`);
-                                  setShowSaveDbPrompt(true);
-                                }}
-                                className="text-[9px] font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer flex items-center gap-0.5"
-                                style={{ color: '#7c3aed', background: '#f5f3ff' }}
-                                title="Save this entire set to Database"
-                              >
-                                <Save className="w-2.5 h-2.5" />
-                                Save DB
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        {diaries.length > 0 && (
-                          <div className="relative mb-3.5">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none" style={{ color: 'var(--th-text4)' }}>
-                              <Search className="w-3.5 h-3.5" />
-                            </div>
-                            <input
-                              type="text"
-                              placeholder="Search by Crime No. or Station..."
-                              value={searchQuery}
-                              onChange={(e) => setSearchQuery(e.target.value)}
-                              className="w-full pl-8 pr-4 py-1.5 border rounded-lg text-xs font-medium transition-all"
-                              style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)', color: 'var(--th-text)' }}
-                            />
-                            {searchQuery && (
-                              <button
-                                onClick={() => setSearchQuery('')}
-                                className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs font-bold cursor-pointer"
-                                style={{ color: 'var(--th-text4)' }}
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {diaries.length === 0 ? (
-                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 rounded-2xl border min-h-[250px]" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                            <FileText className="w-8 h-8 mb-2" style={{ color: 'var(--th-border)' }} />
-                            <p className="text-xs font-semibold" style={{ color: 'var(--th-text3)' }}>No documents loaded</p>
-                            <p className="text-[10px] mt-1 max-w-[190px] leading-relaxed" style={{ color: 'var(--th-text4)' }}>
-                              Upload your scanned police case diary PDF under <strong>Gateway Terminal</strong> tab to begin reconstruction.
-                            </p>
-                          </div>
-                        ) : (
-                          <>
-                            {/* Filtered list based on searchQuery */}
-                            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 flex-1">
-                              {diaries
-                                .filter((diary) => {
-                                  const query = searchQuery.toLowerCase().trim();
-                                  if (!query) return true;
-                                  return (
-                                    (diary.crNoAndSecOfLaw || '').toLowerCase().includes(query) ||
-                                    (diary.policeStation || '').toLowerCase().includes(query) ||
-                                    (diary.district || '').toLowerCase().includes(query) ||
-                                    (diary.dateOfCd || '').toLowerCase().includes(query)
-                                  );
-                                })
-                                .map((diary) => {
-                                  const isChecked = selectedWorkspaceCaseIds.includes(diary.id);
-                                  return (
-                                    <div
-                                      key={diary.id}
-                                      className="w-full rounded-2xl border transition-all flex items-center p-3 gap-2.5 cursor-pointer"
-                                      style={isChecked ? { borderColor: 'var(--th-primary)', background: 'var(--th-primary-xlight)' } : { borderColor: 'var(--th-border2)', background: 'var(--th-surface2)' }}
-                                      onClick={() => {
-                                        setSelectedWorkspaceCaseIds(prev => {
-                                          if (prev.includes(diary.id)) {
-                                            return prev.filter(id => id !== diary.id);
-                                          } else {
-                                            return [...prev, diary.id];
-                                          }
-                                        });
-                                      }}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={isChecked}
-                                        readOnly
-                                        className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer shrink-0"
-                                      />
-                                      <div className="p-2 rounded-xl shrink-0" style={isChecked ? { background: 'var(--th-primary-light)', color: 'var(--th-primary)' } : { background: 'var(--th-surface)', color: 'var(--th-text4)' }}>
-                                        <FileText className="w-4 h-4" />
-                                      </div>
-                                      
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-1.5 justify-between">
-                                          <p className="text-xs font-semibold truncate" style={{ color: 'var(--th-text)' }}>
-                                            {diary.crNoAndSecOfLaw || 'Case Diary Entry'}
-                                          </p>
-                                          
-                                          <div className="flex items-center gap-1 shrink-0">
-                                            {/* Delete record from workspace */}
-                                            <button
-                                              onClick={(e) => handleDeleteWorkspaceDiary(diary.id, e)}
-                                              className="p-1 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                                              style={{ color: 'var(--th-text4)' }}
-                                              title="Delete record from active workspace"
-                                            >
-                                              <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
-
-                                            {/* Small circle checkbox indicator for Saved status */}
-                                            <button
-                                              onClick={(e) => handleToggleSavedDraft(diary.id, e)}
-                                              className={`p-1 rounded-full border transition-all ${
-                                                diary.isSavedDraft
-                                                  ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-200'
-                                                  : 'hover:border-sky-350 hover:text-sky-650'
-                                              }`}
-                                              style={diary.isSavedDraft ? {} : { background: 'var(--th-surface)', borderColor: 'var(--th-border)', color: 'var(--th-text4)' }}
-                                              title={diary.isSavedDraft ? "Saved Draft (Click to toggle)" : "Unsaved Draft (Click to save)"}
-                                            >
-                                              <Check className="w-3 h-3" />
-                                            </button>
-                                          </div>
-                                        </div>
-                                        
-                                        <div className="flex items-center gap-1.5 mt-0.5 text-[10px]" style={{ color: 'var(--th-text4)' }}>
-                                          <span className="font-medium truncate">{diary.policeStation}</span>
-                                          <span>•</span>
-                                          <span className="font-semibold" style={{ color: 'var(--th-primary)' }}>{diary.dateOfCd}</span>
-                                        </div>
-                                      </div>
-                                      <ChevronRight className="w-4 h-4 transition-transform shrink-0" style={{ color: isChecked ? 'var(--th-primary)' : 'var(--th-border)' }} />
-                                    </div>
-                                  );
-                                })}
-                                
-                              {diaries.filter((diary) => {
-                                const query = searchQuery.toLowerCase().trim();
-                                if (!query) return true;
-                                return (
-                                  (diary.crNoAndSecOfLaw || '').toLowerCase().includes(query) ||
-                                  (diary.policeStation || '').toLowerCase().includes(query) ||
-                                  (diary.district || '').toLowerCase().includes(query) ||
-                                  (diary.dateOfCd || '').toLowerCase().includes(query)
-                                );
-                              }).length === 0 && (
-                                <p className="text-center text-xs text-gray-400 py-6 font-medium italic">No matches for "{searchQuery}"</p>
-                              )}
-                            </div>
-
-                            {/* Bulk Export Section */}
-                            <div className="mt-4 pt-3.5 border-t p-3.5 rounded-2xl border" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text3)' }}>Bulk Export Status</span>
-                                <span className="px-2.5 py-0.5 bg-green-105 text-green-700 border border-green-200/55 text-[10px] font-bold rounded-full">
-                                  {diaries.filter(d => d.isSavedDraft).length} / {diaries.length} Saved
-                                </span>
-                              </div>
-                              
-                              {selectedWorkspaceCaseIds.length > 0 ? (
-                                <div className="flex flex-col sm:flex-row gap-2.5">
-                                  <button
-                                    onClick={() => {
-                                      const loaded = diaries.filter(d => selectedWorkspaceCaseIds.includes(d.id));
-                                      if (loaded.length > 0) {
-                                        setDiaries(loaded);
-                                        setSelectedDiaryId(loaded[0].id);
-                                        setSelectedWorkspaceCaseIds([]);
-                                        setActiveTab('editor');
-                                        addLocalLog(`Loaded ${loaded.length} selected cases into workspace`, 'SYSTEM');
-                                      }
-                                    }}
-                                    className="flex-1 text-white py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                                    style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
-                                  >
-                                    <Layers className="w-3.5 h-3.5" />
-                                    Load Data ({selectedWorkspaceCaseIds.length})
-                                  </button>
-                                  <button
-                                    onClick={handleBulkExportZip}
-                                    disabled={isBulkExporting}
-                                    className="flex-1 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                                    style={{ background: '#7c3aed' }}
-                                  >
-                                    {isBulkExporting ? (
-                                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <FileDown className="w-3.5 h-3.5" />
-                                    )}
-                                    Bulk Export Saved Drafts (.ZIP)
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={handleBulkExportZip}
-                                  disabled={isBulkExporting}
-                                  className="w-full disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                                  style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
-                                >
-                                  {isBulkExporting ? (
-                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                  ) : (
-                                    <FileDown className="w-3.5 h-3.5" />
-                                  )}
-                                  Bulk Export Saved Drafts (.ZIP)
-                                </button>
-                              )}
-                              <p className="text-[9px] mt-1.5 text-center leading-normal" style={{ color: 'var(--th-text4)' }}>
-                                Only case diaries with completed draft saves will be included in the exported ZIP archive.
-                              </p>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
-
-                    {sidebarTab === 'history' && (
-                      <div className="flex-1 flex flex-col">
-                        {/* Connection Status Indicator */}
-                        <div className="flex items-center justify-between mb-3 p-2.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--th-primary)' }} />
-                            <span className="text-[10px] font-bold truncate" style={{ color: 'var(--th-text2)' }}>
-                              {supabaseStatus?.isConfigured ? 'Supabase Connected' : 'Supabase Offline'}
-                            </span>
-                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-400'}`} />
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={() => setActiveTab('dashboard')}
-                              className="text-[9.5px] font-bold px-1.5 py-0.5 rounded transition-all cursor-pointer"
-                              style={{ color: 'var(--th-primary)' }}
-                            >
-                              Show Setup
-                            </button>
-                            <button
-                              onClick={fetchSupabaseStatus}
-                              disabled={isLoadingSupaStatus}
-                              className="p-1 hover:bg-gray-200 dark:hover:bg-slate-700 rounded transition-colors disabled:opacity-50 cursor-pointer"
-                              style={{ color: 'var(--th-text3)' }}
-                              title="Refresh connection status"
-                            >
-                              <RefreshCw className={`w-3 h-3 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
-                            </button>
-                          </div>
-                        </div>
-
-                        {isLoadingDbs ? (
-                          <div className="flex-1 flex flex-col items-center justify-center py-10">
-                            <RefreshCw className="w-6 h-6 text-indigo-600 animate-spin mb-2" />
-                            <p className="text-xs font-semibold text-gray-500">Loading your database library...</p>
-                          </div>
-                        ) : !supabaseStatus?.isConfigured ? (
-                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-amber-50/20 rounded-2xl border border-amber-100/50 min-h-[255px]">
-                            <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse mb-2" />
-                            <p className="text-xs font-bold text-indigo-950">Cloud Database Unconfigured</p>
-                            <p className="text-[10px] text-indigo-700/80 mt-1 max-w-[210px] leading-relaxed font-medium">
-                              Define VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your settings to unlock persistent cloud storage.
-                            </p>
-                            <button
-                              onClick={() => setActiveTab('dashboard')}
-                              className="mt-3.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-all shadow-xs"
-                            >
-                              Configure Database
-                            </button>
-                          </div>
-                        ) : savedDatabases.length === 0 ? (
-                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-gray-50/50 rounded-2xl border border-gray-100 min-h-[250px]">
-                            <Database className="w-8 h-8 text-gray-300 mb-2" />
-                            <p className="text-xs font-semibold text-gray-500">No Databases Stored on Cloud</p>
-                            <p className="text-[10px] text-gray-400 mt-1 max-w-[210px] leading-relaxed">
-                              Once you load and reconstruct a scanned PDF in the workspace, click <strong>"Save DB"</strong> to persist it.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1 flex-1">
-                            {savedDatabases.map((dbItem) => {
-                              const isExpanded = selectedSavedDbId === dbItem.id;
-                              const formattedDate = new Date(dbItem.createdAt).toLocaleDateString('en-IN', {
-                                day: 'numeric',
-                                month: 'short',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              });
-                              
-                              return (
-                                <div 
-                                  key={dbItem.id} 
-                                  className={`border rounded-xl transition-all ${
-                                    isExpanded 
-                                      ? 'border-indigo-200 bg-indigo-50/15 shadow-xs' 
-                                      : 'border-gray-100 bg-white hover:bg-gray-50/30'
-                                  }`}
-                                >
-                                  {/* Database Header (Clickable to toggle expand) */}
-                                  <div 
-                                    onClick={() => setSelectedSavedDbId(isExpanded ? null : dbItem.id)}
-                                    className="p-3 flex items-center justify-between cursor-pointer gap-2"
-                                  >
-                                    <div className="min-w-0 flex-1">
-                                      <h4 className="text-xs font-bold text-gray-955 truncate flex items-center gap-1.5">
-                                        <Database className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                                        {dbItem.name}
-                                      </h4>
-                                      <p className="text-[9px] text-gray-400 mt-0.5 font-medium">{formattedDate} • {dbItem.diaries.length} records</p>
-                                    </div>
-                                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180 text-indigo-600' : ''}`} />
-                                  </div>
-
-                                  {/* Expanded content */}
-                                  {isExpanded && (
-                                    <div className="px-3 pb-3 border-t border-gray-100 bg-gray-50/20 pt-2.5 rounded-b-xl">
-                                      {/* Action row */}
-                                      <div className="grid grid-cols-2 gap-2 mb-3">
-                                        <button
-                                          onClick={() => handleViewDatabaseDraft(dbItem)}
-                                          className="bg-indigo-650 hover:bg-indigo-755 text-white text-[10px] font-bold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all"
-                                        >
-                                          <Eye className="w-3.5 h-3.5" />
-                                          View Draft
-                                        </button>
-                                        <button
-                                          onClick={() => handleDownloadAllDocx(dbItem.diaries, dbItem.name)}
-                                          className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-[10px] font-semibold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all"
-                                        >
-                                          <FileDown className="w-3.5 h-3.5 text-gray-400" />
-                                          Export Word
-                                        </button>
-                                      </div>
-
-                                      {/* Cases List */}
-                                      <div className="space-y-1.5">
-                                        <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Extracted Case Numbers</p>
-                                        {dbItem.diaries.map((diary) => (
-                                          <div 
-                                            key={diary.id} 
-                                            className="flex items-center justify-between p-2 bg-white border border-gray-100 rounded-lg gap-2 hover:border-indigo-100 transition-all"
-                                          >
-                                            <div className="min-w-0 flex-1">
-                                              <p className="text-[10px] font-bold text-gray-800 truncate">{diary.crNoAndSecOfLaw || 'Case Record'}</p>
-                                              <p className="text-[8px] text-gray-400 truncate">{diary.policeStation}</p>
-                                            </div>
-                                            <div className="flex items-center gap-1.5 shrink-0">
-                                              <span className="text-[8px] font-bold text-indigo-600 bg-indigo-50/50 px-1.5 py-0.5 rounded-md">{diary.dateOfCd}</span>
-                                              
-                                              {/* Edit individual record button */}
-                                              <button
-                                                onClick={(e) => handleEditDiaryFromDatabase(dbItem, diary.id, e)}
-                                                className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
-                                                title="Edit individual case record in workspace"
-                                              >
-                                                <Edit3 className="w-3 h-3" />
-                                              </button>
-
-                                              {/* Delete individual record button */}
-                                              <button
-                                                onClick={(e) => handleDeleteDiaryFromDatabase(dbItem.id, diary.id, e)}
-                                                className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                                                title="Delete individual case record from database"
-                                              >
-                                                <Trash2 className="w-3 h-3" />
-                                              </button>
-                                            </div>
-                                          </div>
-                                        ))}
-                                      </div>
-
-                                      {/* Danger Zone */}
-                                      <div className="mt-3.5 pt-2 border-t border-gray-100 flex justify-end">
-                                        <button
-                                          onClick={() => handleDeleteDatabase(dbItem.id)}
-                                          className="text-[9px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-md transition-all flex items-center gap-1 cursor-pointer"
-                                        >
-                                          <Trash2 className="w-3 h-3" />
-                                          Delete DB
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'editor' && (
-                <div className="w-full flex flex-col gap-6">
-                  {/* Extraction Control Panel inside Workspace */}
-                  {selectedFile && (
-                    <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col gap-4" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b" style={{ borderColor: 'var(--th-border)' }}>
-                        <div className="flex items-center gap-3">
-                          <div className="p-2.5 rounded-xl" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
-                            <Layers className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>Extraction Gateway Terminal</h4>
-                            <p className="text-[11px] font-medium" style={{ color: 'var(--th-text4)' }}>Reconstruct selected PDF: <strong style={{ color: 'var(--th-text2)' }}>{selectedFile.name}</strong></p>
-                          </div>
-                        </div>
-                        {isExtracting && (
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-[10px] font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md animate-pulse">
-                              {extractionProgress}%
-                            </span>
-                            {isPaused ? (
-                              <button
-                                onClick={handleResume}
-                                className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                              >
-                                <Play className="w-3 h-3" />
-                                Resume
-                              </button>
-                            ) : (
-                              <button
-                                onClick={handlePause}
-                                className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                              >
-                                <Pause className="w-3 h-3" />
-                                Pause
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {!isExtracting && !currentExtractionQueue && (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-450 uppercase tracking-wider mb-2">Start Page</label>
-                            <input
-                              type="number"
-                              min={1}
-                              value={startPageInput}
-                              onChange={(e) => setStartPageInput(Math.max(1, parseInt(e.target.value) || 1))}
-                              className="w-full bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-2 text-xs font-semibold text-gray-900 shadow-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-450 uppercase tracking-wider mb-2">Extraction Mode</label>
-                            <div className="grid grid-cols-2 gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setExtractionMode('free')}
-                                className={`py-1.5 px-2 rounded-xl text-center text-xs font-bold border transition-all cursor-pointer ${
-                                  extractionMode === 'free'
-                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-xs'
-                                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
-                                }`}
-                              >
-                                Free OCR
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setExtractionMode('direct')}
-                                className={`py-1.5 px-2 rounded-xl text-center text-xs font-bold border transition-all cursor-pointer ${
-                                  extractionMode === 'direct'
-                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-xs'
-                                    : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
-                                }`}
-                              >
-                                Direct Cloud
-                              </button>
-                            </div>
-                          </div>
-                          <div className="flex items-end">
-                            <button
-                              onClick={runExtraction}
-                              className="w-full bg-indigo-650 hover:bg-indigo-700 text-white py-2 px-4 rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                            >
-                              <Sparkles className="w-3.5 h-3.5" />
-                              AI Reconstruct & Format
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Active reconstruction progress bar */}
-                      {(isExtracting || currentExtractionQueue) && (
-                        <div className="space-y-3 mt-2">
-                          <div className="flex items-center justify-between text-[11px] font-semibold text-gray-800">
-                            <span className="truncate max-w-[80%]">{extractionStep}</span>
-                            <span className="font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
-                              {extractionProgress}%
-                            </span>
-                          </div>
-                          <div className="w-full h-2.5 bg-gray-150 rounded-full overflow-hidden relative border border-gray-200/50">
-                            <div 
-                              className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-300"
-                              style={{ width: `${extractionProgress}%` }}
-                            />
-                          </div>
-                          {extractionLogs.length > 0 && (
-                            <div 
-                              className="bg-slate-950 rounded-2xl p-4 border border-slate-900 font-mono text-[9px] leading-relaxed text-slate-300 max-h-[120px] overflow-y-auto shadow-inner flex flex-col gap-1 select-none"
-                              style={{ scrollBehavior: 'smooth' }}
-                            >
-                              {extractionLogs.map((log, index) => {
-                                let colorClass = 'text-slate-300';
-                                if (log.includes('[SYSTEM]')) colorClass = 'text-sky-400';
-                                else if (log.includes('[OCR]')) colorClass = 'text-fuchsia-400';
-                                else if (log.includes('[AI]')) colorClass = 'text-amber-400';
-                                else if (log.includes('[RECONSTRUCT]')) colorClass = 'text-indigo-400';
-                                else if (log.includes('[SUCCESS]')) colorClass = 'text-emerald-400 font-semibold';
-                                else if (log.includes('[ERROR]')) colorClass = 'text-rose-400 font-semibold';
-                                return (
-                                  <div key={index} className={colorClass}>
-                                    {log}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Inline Case Navigation and Search bar inside Workspace */}
-                  {diaries.length > 0 && (
-                    <div className="backdrop-blur-md border rounded-3xl p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-[10px] font-bold uppercase tracking-wider block mb-2" style={{ color: 'var(--th-text4)' }}>
-                          Select Case Number to Edit ({diaries.length} cases in workspace)
-                        </span>
-                        <div className="flex flex-wrap gap-2 max-h-[140px] overflow-y-auto pr-1">
-                          {diaries.map((diary) => {
-                            const isSelected = selectedDiaryId === diary.id;
-                            return (
-                              <button
-                                key={diary.id}
-                                onClick={() => setSelectedDiaryId(diary.id)}
-                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5`}
-                                style={isSelected ? { background: 'var(--th-primary)', color: 'white', borderColor: 'var(--th-primary)' } : { background: 'var(--th-surface)', color: 'var(--th-text2)', borderColor: 'var(--th-border)' }}
-                              >
-                                <FileText className="w-3.5 h-3.5" />
-                                <span className="truncate max-w-[150px]">
-                                  {diary.crNoAndSecOfLaw.split(' ')[0] || diary.crNoAndSecOfLaw || 'Case Record'}
-                                </span>
-                                <span className="text-[9.5px] opacity-75 font-normal">({diary.dateOfCd || 'No Date'})</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                    </div>
-                  )}
-
-                  {/* Save to Database Banner Prompt */}
-                  {showSaveDbPrompt && diaries.length > 0 && (
-                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                      <div className="flex items-start gap-3 flex-1">
-                        <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl">
-                          <Database className="w-5 h-5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-xs font-bold text-gray-955 uppercase tracking-wide">Save Extracted Diaries as a Database</h4>
-                          <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Give this dataset a name to persist these case records securely in your Cloud library.</p>
-                          
-                          <div className="mt-3 max-w-md">
-                            <input
-                              type="text"
-                              value={dbNameInput}
-                              onChange={(e) => setDbNameInput(e.target.value)}
-                              placeholder="e.g. Case Diary - Vikiramangalam PS - 2026"
-                              className="w-full bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-sm"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-end">
-                        <button
-                          onClick={() => setShowSaveDbPrompt(false)}
-                          className="px-3.5 py-1.5 text-xs text-gray-500 hover:text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 font-semibold rounded-xl transition-all cursor-pointer shadow-xs"
-                        >
-                          Dismiss
-                        </button>
-                        <button
-                          onClick={handleSaveToDatabase}
-                          className="px-4 py-1.5 text-xs text-white bg-indigo-650 hover:bg-indigo-700 font-bold rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Save className="w-3.5 h-3.5" />
-                          Save Database
-                        </button>
-                      </div>
-                    </div>
-                  )}
 
                   {/* Database Save Status Feedback Notification */}
                   {saveDbStatus.message && (
@@ -2382,486 +1911,330 @@ export default function App() {
                     </div>
                   )}
 
-                  {activeDiary ? (
-                    <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                  {/* Read-Only Extracted Data Preview Card */}
+                  {lastExtractedDiaries.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="backdrop-blur-md rounded-3xl p-6 shadow-sm border flex flex-col gap-4"
+                      style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+                    >
+                      <h3 className="font-display font-semibold text-base flex items-center gap-2" style={{ color: 'var(--th-text)' }}>
+                        <CheckCircle className="w-5 h-5 text-emerald-500" />
+                        AI Extraction Preview ({lastExtractedDiaries.length} Cases)
+                      </h3>
                       
-                      {/* Database active session indicator banner */}
-                      {loadedDbId && (
-                        <div className="mb-4 border rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
-                          <div className="flex items-center gap-2">
-                            <Database className="w-4 h-4 shrink-0" style={{ color: 'var(--th-primary)' }} />
-                            <div>
-                              <p className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Active Database Session: <span className="underline">{loadedDbName}</span></p>
-                              <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Any changes you make here can be synced directly back to your database library.</p>
+                      <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
+                        {lastExtractedDiaries.map((diary, idx) => (
+                          <div key={diary.id || idx} className="p-4 border rounded-2xl flex flex-col gap-2.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                            <div className="flex items-center justify-between gap-2 border-b pb-2" style={{ borderColor: 'var(--th-border)' }}>
+                              <span className="text-xs font-bold" style={{ color: 'var(--th-primary)' }}>
+                                Crime No: {diary.crNoAndSecOfLaw || 'N/A'}
+                              </span>
+                              <span className="text-[10px] font-semibold font-mono" style={{ color: 'var(--th-text4)' }}>
+                                Date of CD: {diary.dateOfCd || 'N/A'}
+                              </span>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-2 text-[11px] font-medium">
+                              <div>
+                                <span className="text-[9px] uppercase tracking-wider block font-bold" style={{ color: 'var(--th-text4)' }}>Police Station</span>
+                                <span style={{ color: 'var(--th-text2)' }}>{diary.policeStation || 'N/A'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[9px] uppercase tracking-wider block font-bold" style={{ color: 'var(--th-text4)' }}>District</span>
+                                <span style={{ color: 'var(--th-text2)' }}>{diary.district || 'N/A'}</span>
+                              </div>
+                              <div className="col-span-2">
+                                <span className="text-[9px] uppercase tracking-wider block font-bold" style={{ color: 'var(--th-text4)' }}>Complainant</span>
+                                <span style={{ color: 'var(--th-text2)' }}>{diary.complainant || 'N/A'}</span>
+                              </div>
+                              <div className="col-span-2">
+                                <span className="text-[9px] uppercase tracking-wider block font-bold" style={{ color: 'var(--th-text4)' }}>Accused Persons ({diary.accusedList?.length || 0})</span>
+                                <span style={{ color: 'var(--th-text2)' }}>
+                                  {diary.accusedList && diary.accusedList.length > 0 
+                                    ? diary.accusedList.map((a: any) => a.nameAndAddress).join(', ')
+                                    : 'None listed'}
+                                </span>
+                              </div>
+                              <div className="col-span-2">
+                                <span className="text-[9px] uppercase tracking-wider block font-bold" style={{ color: 'var(--th-text4)' }}>Remarks Summary</span>
+                                <p className="text-[10.5px] italic line-clamp-3 leading-relaxed mt-0.5" style={{ color: 'var(--th-text3)' }}>
+                                  {diary.remarks || 'No remarks transcribed.'}
+                                </p>
+                              </div>
                             </div>
                           </div>
-                          <button
-                            onClick={handleUpdateDatabase}
-                            className="text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
-                            style={{ background: 'var(--th-primary)' }}
-                          >
-                            <Save className="w-3.5 h-3.5" />
-                            Sync Updates to DB
-                          </button>
-                        </div>
-                      )}
-                      
-                      {/* Workspace Header Actions */}
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b" style={{ borderColor: 'var(--th-border)' }}>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 bg-green-50 text-green-700 text-[10px] font-bold rounded-md border border-green-200/50">VERIFIED PREVIEW</span>
-                            <span className="text-[10px] font-semibold" style={{ color: 'var(--th-text4)' }}>{activeDiary.dateOfCd}</span>
-                          </div>
-                          <h2 className="font-display font-bold text-lg mt-1" style={{ color: 'var(--th-text)' }}>{activeDiary.crNoAndSecOfLaw}</h2>
-                          <p className="text-xs font-medium" style={{ color: 'var(--th-text4)' }}>Reconstructed Case Diary • Station: {activeDiary.policeStation}</p>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-stretch sm:self-auto justify-end">
-                          <button
-                            id="save-draft-btn"
-                            onClick={saveWorkspaceChanges}
-                            className="border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
-                          >
-                            {isSaved ? (
-                              <>
-                                <Check className="w-4 h-4 text-green-600" />
-                                <span className="text-green-700">Changes Saved!</span>
-                              </>
-                            ) : (
-                              <>
-                                <Save className="w-4 h-4 text-gray-400" />
-                                Save Draft
-                              </>
-                            )}
-                          </button>
-
-                          <button
-                            id="export-docx-btn"
-                            onClick={() => handleDownloadDocx(activeDiary)}
-                            className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
-                            title="Export the currently viewed case diary to Word"
-                          >
-                            <FileDown className="w-4 h-4 text-gray-400" />
-                            Export Case Word
-                          </button>
-
-                          {diaries.length > 1 && (
-                            <button
-                              id="export-all-docx-btn"
-                              onClick={() => handleDownloadAllDocx(diaries, `Combined-Case-Diaries-${Date.now()}`)}
-                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 px-4 rounded-xl flex items-center gap-2 cursor-pointer shadow-sm hover:shadow transition-all"
-                              title="Export all loaded case diaries combined into a single Word document"
-                            >
-                              <FileDown className="w-4 h-4" />
-                              Export Combined Word ({diaries.length})
-                            </button>
-                          )}
-                        </div>
+                        ))}
                       </div>
 
-                      {/* Interactive Case Diary Document Form */}
-                      <div className="space-y-6 mt-6 max-h-[680px] overflow-y-auto pr-1">
-                        
-                        {/* Section 1: Headers */}
-                        <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                          <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>I. Administration & Registry</h4>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <OutlinedInput
-                              label="Police Station"
-                              value={activeDiary.policeStation}
-                              onChange={(e) => handleFieldChange('policeStation', e.target.value)}
-                              onClear={() => handleFieldChange('policeStation', '')}
+                      {/* Cloud Save & Workspace View Actions */}
+                      <div className="border-t pt-4 mt-2 space-y-4" style={{ borderColor: 'var(--th-border)' }}>
+                        <div className="flex flex-col gap-2">
+                          <label className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Cloud Database Name</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="e.g. Case Files - Vikiramangalam - CD Oct"
+                              value={gatewayDbName}
+                              onChange={(e) => setGatewayDbName(e.target.value)}
+                              className="flex-1 bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-2 text-xs font-semibold text-gray-900 shadow-sm"
                             />
-                            <OutlinedInput
-                              label="District"
-                              value={activeDiary.district}
-                              onChange={(e) => handleFieldChange('district', e.target.value)}
-                              onClear={() => handleFieldChange('district', '')}
-                            />
-                            <OutlinedInput
-                              label="CR. No. & Sec of Law"
-                              value={activeDiary.crNoAndSecOfLaw}
-                              onChange={(e) => handleFieldChange('crNoAndSecOfLaw', e.target.value)}
-                              onClear={() => handleFieldChange('crNoAndSecOfLaw', '')}
-                            />
-                            <OutlinedInput
-                              label="Date of CD"
-                              value={activeDiary.dateOfCd}
-                              onChange={(e) => handleFieldChange('dateOfCd', e.target.value)}
-                              onClear={() => handleFieldChange('dateOfCd', '')}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Section 2: General parameters */}
-                        <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                          <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>II. Occurrence & Complainant Details</h4>
-                          <div className="space-y-4">
-                            <OutlinedTextarea
-                              label="Date, Time & Place of Occurrence"
-                              value={activeDiary.dateTimeAndPlaceOfOccurrence}
-                              onChange={(e) => handleFieldChange('dateTimeAndPlaceOfOccurrence', e.target.value)}
-                              rows={2}
-                            />
-                            <OutlinedInput
-                              label="Date of Report / Time"
-                              value={activeDiary.dateOfReportTime}
-                              onChange={(e) => handleFieldChange('dateOfReportTime', e.target.value)}
-                              onClear={() => handleFieldChange('dateOfReportTime', '')}
-                            />
-                            <OutlinedTextarea
-                              label="II. Complainant"
-                              value={activeDiary.complainant}
-                              onChange={(e) => handleFieldChange('complainant', e.target.value)}
-                              rows={2}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Section 3: Accused List Table */}
-                        <div className="p-4 border rounded-xl space-y-3.5" style={{ borderColor: 'var(--th-border)' }}>
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>III. Accused Details</h4>
                             <button
-                              onClick={addAccusedRow}
-                              className="text-[10px] font-bold px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors"
-                              style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}
+                              onClick={handleSaveGatewayToDatabase}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 animate-fade-in"
                             >
-                              <Plus className="w-3.5 h-3.5" />
-                              Add Accused
+                              <Save className="w-4 h-4" />
+                              Save to Database
                             </button>
                           </div>
-
-                          {/* List representation of accused for seamless editing */}
-                          <div className="space-y-3">
-                            {activeDiary.accusedList.map((acc, index) => (
-                              <div key={index} className="flex gap-2 items-center p-2.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                                <span className="text-[11px] font-bold text-gray-400 w-6 text-center">{acc.sNo}</span>
-                                <OutlinedInput
-                                  label={`Accused ${acc.sNo} Name & Address`}
-                                  value={acc.nameAndAddress}
-                                  onChange={(e) => handleAccusedChange(index, 'nameAndAddress', e.target.value)}
-                                  className="flex-1"
-                                />
-                                <button
-                                  onClick={() => removeAccusedRow(index)}
-                                  className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                                  title="Delete Accused Row"
-                                >
-                                  <Trash className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ))}
-                            {activeDiary.accusedList.length === 0 && (
-                              <p className="text-[10px] text-gray-450 text-center py-2 italic bg-gray-50/50 rounded-lg">No accused registered. Click "Add Accused" to define.</p>
-                            )}
-                          </div>
                         </div>
 
-                        {/* Section 4: Property Details */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="p-4 border border-gray-200 rounded-xl">
-                            <OutlinedTextarea
-                              label="IV. Property Lost Details"
-                              value={activeDiary.propertyLostDetails}
-                              onChange={(e) => handleFieldChange('propertyLostDetails', e.target.value)}
-                              onVoiceClick={() => toggleVoiceTyping('propertyLostDetails')}
-                              isListening={listeningField === 'propertyLostDetails'}
-                              rows={2}
-                            />
-                          </div>
-                          <div className="p-4 border border-gray-200 rounded-xl">
-                            <OutlinedTextarea
-                              label="V. Recovered Property Details"
-                              value={activeDiary.recoveredPropertyDetails}
-                              onChange={(e) => handleFieldChange('recoveredPropertyDetails', e.target.value)}
-                              onVoiceClick={() => toggleVoiceTyping('recoveredPropertyDetails')}
-                              isListening={listeningField === 'recoveredPropertyDetails'}
-                              rows={2}
-                            />
-                          </div>
+                        <div className="flex justify-end gap-2.5">
+                          <button
+                            onClick={handleViewGatewayInWorkspace}
+                            className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                          >
+                            <Eye className="w-4 h-4 text-gray-400" />
+                            View in Workspace
+                          </button>
                         </div>
-
-                        {/* Section 5: Stage of Case and Court specifics */}
-                        <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>VI. Stage & Court Administration</h4>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const targetVal = activeDiary.stageOfTheCase === 'CASE DISPOSED' ? 'PENDING TRIAL' : 'CASE DISPOSED';
-                                handleFieldChange('stageOfTheCase', targetVal);
-                                if (targetVal === 'CASE DISPOSED') {
-                                  handleFieldChange('nextHearingDate', '');
-                                }
-                              }}
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
-                                activeDiary.stageOfTheCase === 'CASE DISPOSED'
-                                  ? 'bg-red-500 text-white border-red-600 shadow-xs'
-                                  : 'bg-red-55 text-red-750 border-red-200 hover:bg-red-100'
-                              }`}
-                              title="Click to dispose of this case immediately"
-                            >
-                              {activeDiary.stageOfTheCase === 'CASE DISPOSED' ? '✓ Case Disposed' : 'Case Disposed'}
-                            </button>
-                          </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <OutlinedInput
-                              label="Stage of the Case"
-                              value={activeDiary.stageOfTheCase}
-                              onChange={(e) => handleFieldChange('stageOfTheCase', e.target.value)}
-                              onClear={() => handleFieldChange('stageOfTheCase', '')}
-                            />
-                            <OutlinedInput
-                              label="Court Ref. No."
-                              value={activeDiary.courtRefNo}
-                              onChange={(e) => handleFieldChange('courtRefNo', e.target.value)}
-                              onClear={() => handleFieldChange('courtRefNo', '')}
-                            />
-                            <OutlinedInput
-                              label="Hearing No."
-                              value={activeDiary.hearingNo}
-                              onChange={(e) => handleFieldChange('hearingNo', e.target.value)}
-                              onClear={() => handleFieldChange('hearingNo', '')}
-                            />
-                            <OutlinedInput
-                              label="Court Name & Place"
-                              value={activeDiary.courtNameAndPlace}
-                              onChange={(e) => handleFieldChange('courtNameAndPlace', e.target.value)}
-                              onClear={() => handleFieldChange('courtNameAndPlace', '')}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Section 6: Specific Hearing Checks (Boolean YES/NO switches) */}
-                        <div className="p-4 border rounded-xl space-y-4" style={{ borderColor: 'var(--th-border)' }}>
-                          <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>Hearing Parameters & Checks</h4>
-                          
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            <div>
-                              <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>Magistrate Present?</label>
-                              <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFieldChange('whetherMagistratePresent', 'YES')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
-                                  style={activeDiary.whetherMagistratePresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
-                                >
-                                  YES
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFieldChange('whetherMagistratePresent', 'NO')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
-                                  style={activeDiary.whetherMagistratePresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
-                                >
-                                  NO
-                                </button>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>APP / PP Present?</label>
-                              <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFieldChange('whetherAppPpPresent', 'YES')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
-                                  style={activeDiary.whetherAppPpPresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
-                                >
-                                  YES
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFieldChange('whetherAppPpPresent', 'NO')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
-                                  style={activeDiary.whetherAppPpPresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
-                                >
-                                  NO
-                                </button>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>Defence Counsel Present?</label>
-                              <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'YES')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
-                                  style={activeDiary.whetherDefenceCounselPresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
-                                >
-                                  YES
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'NO')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
-                                  style={activeDiary.whetherDefenceCounselPresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
-                                >
-                                  NO
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Numeric stats */}
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
-                            <OutlinedInput
-                              label="PWs Cited"
-                              value={activeDiary.noOfPwsCited}
-                              onChange={(e) => handleFieldChange('noOfPwsCited', e.target.value)}
-                            />
-                            <OutlinedInput
-                              label="PWs Examined So Far"
-                              value={activeDiary.noOfPwsExaminedSoFar}
-                              onChange={(e) => handleFieldChange('noOfPwsExaminedSoFar', e.target.value)}
-                            />
-                            <OutlinedInput
-                              label="Accused Charged"
-                              value={activeDiary.totalNoOfAccusedCharged}
-                              onChange={(e) => handleFieldChange('totalNoOfAccusedCharged', e.target.value)}
-                            />
-                            <OutlinedInput
-                              label="Accused Present"
-                              value={activeDiary.noOfAccusedPresent}
-                              onChange={(e) => handleFieldChange('noOfAccusedPresent', e.target.value)}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Section 7: Case Remarks Multi-line */}
-                        <div className="p-4 border border-indigo-200 bg-indigo-50/10 rounded-xl space-y-2">
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                            <label className="block text-[10px] font-bold text-indigo-705 uppercase tracking-wider">
-                              REMARKS & TAMIL TRANSCRIPTION
-                            </label>
-                            <button
-                              type="button"
-                              onClick={toggleRemarksVoiceTyping}
-                              className={`flex items-center justify-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer border ${
-                                isListeningRemarks 
-                                  ? 'bg-red-500 hover:bg-red-650 text-white border-red-600 animate-pulse'
-                                  : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 shadow-xs'
-                              }`}
-                              title="Tamil Voice Typing"
-                            >
-                              {isListeningRemarks ? (
-                                <>
-                                  <MicOff className="w-3.5 h-3.5" />
-                                  Stop Listening
-                                </>
-                              ) : (
-                                <>
-                                  <Mic className="w-3.5 h-3.5 text-indigo-500" />
-                                  Tamil Voice Typing (பேசவும்)
-                                </>
-                              )}
-                            </button>
-                          </div>
-                          <p className="text-[9.5px] text-gray-400 font-medium">
-                            Preserve typewriter records, signatures, and fine payments clearly. Supports complete line breaks.
-                          </p>
-                          <textarea
-                            rows={8}
-                            value={activeDiary.remarks}
-                            onChange={(e) => handleFieldChange('remarks', e.target.value)}
-                            className="mt-2 w-full bg-white border border-gray-200 rounded-xl p-3.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
-                            placeholder="Insert case diary remarks, typewriter transcripts, or hand-written summaries"
-                          />
-                        </div>
-
-                        {/* Section 8: Posted & Future Hearing parameters */}
-                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
-                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">Posted Parameters & Next Hearing</h4>
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <OutlinedInput
-                              label="Posted For"
-                              value={activeDiary.postedFor}
-                              onChange={(e) => handleFieldChange('postedFor', e.target.value)}
-                              onClear={() => handleFieldChange('postedFor', '')}
-                            />
-                            <OutlinedInput
-                              label="Next Hearing Date"
-                              value={activeDiary.nextHearingDate}
-                              onChange={(e) => handleFieldChange('nextHearingDate', e.target.value)}
-                              onClear={() => handleFieldChange('nextHearingDate', '')}
-                            />
-                            <OutlinedInput
-                              label="Attended By"
-                              value={activeDiary.attendedBy}
-                              onChange={(e) => handleFieldChange('attendedBy', e.target.value)}
-                              onClear={() => handleFieldChange('attendedBy', '')}
-                            />
-                          </div>
-                        </div>
-
                       </div>
-
-                      {/* Pinned Bottom Action Buttons */}
-                      <div className="flex flex-wrap items-center gap-2.5 shrink-0 justify-end pt-5 border-t mt-5" style={{ borderColor: 'var(--th-border)' }}>
-                        {loadedDbId ? (
-                          <button
-                            onClick={handleUpdateDatabase}
-                            className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
-                            style={{ background: 'var(--th-primary)' }}
-                          >
-                            <Save className="w-3.5 h-3.5" />
-                            Sync Updates to DB
-                          </button>
-                        ) : (
-                          <button
-                            onClick={handleSaveToDatabase}
-                            className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
-                            style={{ background: 'var(--th-primary)' }}
-                          >
-                            <Save className="w-3.5 h-3.5" />
-                            Save to Database
-                          </button>
+                    </motion.div>
+                  )}
+                </div>
+              )}
+              {activeTab === 'records' && (
+                <div className="max-w-3xl mx-auto w-full flex flex-col gap-6 animate-fade-in">
+                  <div className="backdrop-blur-md rounded-3xl p-6 shadow-sm border flex-1 flex flex-col min-h-[420px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)', boxShadow: 'var(--th-card-shadow)' }}>
+                    <div className="flex items-center justify-between mb-4 pb-2 border-b" style={{ borderColor: 'var(--th-border)' }}>
+                      <div>
+                        <h3 className="font-display font-semibold text-base flex items-center gap-2" style={{ color: 'var(--th-text)' }}>
+                          <Database className="w-5 h-5" style={{ color: 'var(--th-primary)' }} />
+                          Supabase Cloud Databases
+                        </h3>
+                        <p className="text-[10px] font-medium" style={{ color: 'var(--th-text4)' }}>
+                          Browse, load, and manage your saved police case records.
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        {supabaseStatus?.isConfigured && (
+                          <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                            Connected
+                          </span>
                         )}
                         <button
-                          id="save-draft-btn-bottom"
-                          onClick={saveWorkspaceChanges}
-                          className="border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
+                          onClick={fetchSupabaseStatus}
+                          disabled={isLoadingSupaStatus}
+                          className="p-1.5 hover:bg-gray-150 dark:hover:bg-slate-800 rounded-xl transition-all disabled:opacity-50 cursor-pointer border"
+                          style={{ color: 'var(--th-text3)', borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}
+                          title="Refresh connection status"
                         >
-                          {isSaved ? (
-                            <>
-                              <Check className="w-4 h-4 text-green-600" />
-                              <span className="text-green-700">Changes Saved!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Save className="w-4 h-4 text-gray-400" />
-                              Save Draft
-                            </>
-                          )}
+                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
                         </button>
-
-                        <button
-                          id="export-docx-btn-bottom"
-                          onClick={() => handleDownloadDocx(activeDiary)}
-                          className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
-                          title="Export the currently viewed case diary to Word"
-                        >
-                          <FileDown className="w-4 h-4 text-gray-400" />
-                          Export Case Word
-                        </button>
-
-                        {diaries.length > 1 && (
-                          <button
-                            id="export-all-docx-btn-bottom"
-                            onClick={() => handleDownloadAllDocx(diaries, `Combined-Case-Diaries-${Date.now()}`)}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 px-4 rounded-xl flex items-center gap-2 cursor-pointer shadow-sm hover:shadow transition-all"
-                            title="Export all loaded case diaries combined into a single Word document"
-                          >
-                            <FileDown className="w-4 h-4" />
-                            Export Combined Word ({diaries.length})
-                          </button>
-                        )}
                       </div>
                     </div>
-                  ) : (
+
+                    {isLoadingDbs ? (
+                      <div className="flex-1 flex flex-col items-center justify-center py-20">
+                        <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
+                        <p className="text-xs font-semibold" style={{ color: 'var(--th-text3)' }}>Loading your database library...</p>
+                      </div>
+                    ) : !supabaseStatus?.isConfigured ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center p-8 rounded-3xl border min-h-[300px]" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                        <Sparkles className="w-10 h-10 animate-pulse mb-3" style={{ color: 'var(--th-primary)' }} />
+                        <p className="text-sm font-bold" style={{ color: 'var(--th-text2)' }}>Cloud Database Unconfigured</p>
+                        <p className="text-xs mt-1.5 max-w-xs leading-relaxed" style={{ color: 'var(--th-text4)' }}>
+                          Define VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your settings to unlock persistent cloud storage.
+                        </p>
+                        <button
+                          onClick={() => setActiveTab('dashboard')}
+                          className="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                        >
+                          Configure Database
+                        </button>
+                      </div>
+                    ) : savedDatabases.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center p-8 rounded-3xl border min-h-[300px]" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                        <Database className="w-10 h-10 mb-3" style={{ color: 'var(--th-border)' }} />
+                        <p className="text-sm font-semibold" style={{ color: 'var(--th-text3)' }}>No Databases Stored on Cloud</p>
+                        <p className="text-xs mt-1.5 max-w-xs leading-relaxed" style={{ color: 'var(--th-text4)' }}>
+                          Once you load and reconstruct a scanned PDF in the workspace, click <strong>"Save DB"</strong> to persist it.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+                        {savedDatabases.map((dbItem) => {
+                          const isExpanded = selectedSavedDbId === dbItem.id;
+                          const formattedDate = new Date(dbItem.createdAt).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          });
+                          
+                          // Check if any cases are selected in this specific database
+                          const selectedInThisDb = dbItem.diaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
+
+                          return (
+                            <div 
+                              key={dbItem.id} 
+                              className={`border rounded-2xl transition-all ${
+                                isExpanded 
+                                  ? 'shadow-sm' 
+                                  : 'hover:bg-gray-50/20'
+                              }`}
+                              style={{ 
+                                borderColor: isExpanded ? 'var(--th-primary)' : 'var(--th-border2)', 
+                                background: isExpanded ? 'var(--th-primary-xlight)' : 'var(--th-surface2)' 
+                              }}
+                            >
+                              {/* Database Header (Clickable to toggle expand) */}
+                              <div 
+                                onClick={() => {
+                                  setSelectedSavedDbId(isExpanded ? null : dbItem.id);
+                                  setSelectedDatabaseCaseIds([]); // Clear selection when toggling
+                                }}
+                                className="p-4 flex items-center justify-between cursor-pointer gap-2"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <h4 className="text-xs font-bold truncate flex items-center gap-1.5" style={{ color: 'var(--th-text)' }}>
+                                    <Database className="w-4 h-4 shrink-0" style={{ color: 'var(--th-primary)' }} />
+                                    {dbItem.name}
+                                  </h4>
+                                  <p className="text-[10px] mt-0.5 font-medium" style={{ color: 'var(--th-text4)' }}>{formattedDate} • {dbItem.diaries.length} records</p>
+                                </div>
+                                <ChevronDown className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} style={{ color: 'var(--th-text4)' }} />
+                              </div>
+
+                              {/* Expanded content */}
+                              {isExpanded && (
+                                <div className="px-4 pb-4 border-t pt-3.5 rounded-b-2xl" style={{ borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}>
+                                  {/* Action row */}
+                                  <div className="flex flex-col sm:flex-row gap-2.5 mb-4">
+                                    <button
+                                      onClick={() => handleViewDatabaseDraft(dbItem)}
+                                      className="flex-1 text-white text-xs font-bold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                                      style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
+                                    >
+                                      <Layers className="w-4 h-4" />
+                                      Load Full Database to Workspace
+                                    </button>
+                                    <button
+                                      onClick={() => handleDownloadAllDocx(dbItem.diaries, dbItem.name)}
+                                      className="bg-white border border-gray-200 text-gray-700 text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all hover:bg-gray-50"
+                                    >
+                                      <FileDown className="w-4 h-4 text-gray-400" />
+                                      Export All to Word
+                                    </button>
+                                  </div>
+
+                                  {/* Cases List */}
+                                  <div className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Extracted Case Numbers</p>
+                                      {selectedInThisDb.length > 0 && (
+                                        <button
+                                          onClick={() => handleLoadSelectedCases(dbItem)}
+                                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold py-1 px-2.5 rounded-lg flex items-center gap-1 cursor-pointer transition-all shadow-xs"
+                                        >
+                                          <Play className="w-3 h-3" />
+                                          Load Selected Cases ({selectedInThisDb.length})
+                                        </button>
+                                      )}
+                                    </div>
+                                    {dbItem.diaries.map((diary) => {
+                                      const isChecked = selectedDatabaseCaseIds.includes(diary.id);
+                                      return (
+                                        <div 
+                                          key={diary.id} 
+                                          className="flex items-center justify-between p-3 border rounded-xl gap-3 transition-all cursor-pointer"
+                                          style={{ 
+                                            borderColor: isChecked ? 'var(--th-primary)' : 'var(--th-border2)', 
+                                            background: isChecked ? 'var(--th-primary-xlight)' : 'var(--th-surface2)' 
+                                          }}
+                                          onClick={() => {
+                                            setSelectedDatabaseCaseIds(prev => {
+                                              if (prev.includes(diary.id)) {
+                                                return prev.filter(id => id !== diary.id);
+                                              } else {
+                                                return [...prev, diary.id];
+                                              }
+                                            });
+                                          }}
+                                        >
+                                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                            <input
+                                              type="checkbox"
+                                              checked={isChecked}
+                                              readOnly
+                                              className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer shrink-0"
+                                            />
+                                            <div className="min-w-0 flex-1">
+                                              <p className="text-xs font-bold truncate" style={{ color: 'var(--th-text)' }}>{diary.crNoAndSecOfLaw || 'Case Record'}</p>
+                                              <p className="text-[10px] truncate" style={{ color: 'var(--th-text4)' }}>{diary.policeStation}</p>
+                                            </div>
+                                          </div>
+                                          
+                                          <div className="flex items-center gap-2 shrink-0">
+                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-md" style={{ color: 'var(--th-primary)', background: 'var(--th-surface)' }}>{diary.dateOfCd}</span>
+                                            
+                                            {/* Edit individual record button */}
+                                            <button
+                                              onClick={(e) => handleEditDiaryFromDatabase(dbItem, diary.id, e)}
+                                              className="p-1.5 rounded-lg transition-colors border shadow-2xs hover:bg-gray-50 bg-white"
+                                              style={{ color: 'var(--th-text3)', borderColor: 'var(--th-border)' }}
+                                              title="Edit individual case record in workspace"
+                                            >
+                                              <Edit3 className="w-3.5 h-3.5" />
+                                            </button>
+
+                                            {/* Delete individual record button */}
+                                            {roleInfo.level === 'admin' && (
+                                              <button
+                                                onClick={(e) => handleDeleteDiaryFromDatabase(dbItem.id, diary.id, e)}
+                                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 transition-colors border shadow-2xs bg-white"
+                                                style={{ borderColor: 'var(--th-border)' }}
+                                                title="Delete individual case record from database"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Danger Zone */}
+                                  {roleInfo.level === 'admin' && (
+                                    <div className="mt-4 pt-3 border-t flex justify-end" style={{ borderColor: 'var(--th-border)' }}>
+                                      <button
+                                        onClick={() => handleDeleteDatabase(dbItem.id)}
+                                        className="text-[10px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer border border-transparent hover:border-red-200"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                        Delete Cloud DB
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}              {activeTab === 'editor' && (
+                <div className="w-full flex flex-col gap-6">
+                  {diaries.length === 0 ? (
                     /* WORKSPACE PLACEHOLDER */
-                    <div className="backdrop-blur-md border rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center min-h-[600px] my-auto" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                    <div className="backdrop-blur-md border rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center min-h-[600px] my-auto animate-fade-in" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
                       <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 border shadow-xs" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                         <FileCheck2 className="w-8 h-8 animate-pulse" style={{ color: 'var(--th-primary)' }} />
                       </div>
@@ -2884,6 +2257,641 @@ export default function App() {
                             Edit parameters right inside your browser workspace. Export high-fidelity Microsoft Word documents instantly.
                           </p>
                         </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* SPLIT PANEL LAYOUT */
+                    <div className="w-full flex flex-col lg:flex-row gap-6 items-start animate-fade-in">
+                      {/* Left panel: loaded cases list & search */}
+                      <div 
+                        className="w-full lg:w-80 shrink-0 backdrop-blur-md border rounded-3xl p-5 shadow-sm flex flex-col gap-4 sticky top-[130px] lg:max-h-[calc(100vh-160px)] overflow-hidden"
+                        style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+                      >
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text3)' }}>Loaded Case Diaries</h4>
+                        
+                        {/* Search loaded cases */}
+                        <div className="relative">
+                          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--th-text4)' }} />
+                          <input
+                            type="text"
+                            placeholder="Search workspace..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full pl-9 pr-3.5 py-2 border rounded-xl text-xs font-semibold focus:outline-none transition-all shadow-xs"
+                            style={{
+                              background: 'var(--th-input-bg)',
+                              borderColor: 'var(--th-input-border)',
+                              color: 'var(--th-text)'
+                            }}
+                          />
+                        </div>
+
+                        {/* Scrollable list of loaded cases */}
+                        <div className="flex-1 overflow-y-auto max-h-[300px] lg:max-h-[none] flex flex-col gap-2 pr-1">
+                          {diaries
+                            .filter(diary => {
+                              const q = searchQuery.toLowerCase().trim();
+                              if (!q) return true;
+                              return (diary.crNoAndSecOfLaw || '').toLowerCase().includes(q) ||
+                                     (diary.policeStation || '').toLowerCase().includes(q) ||
+                                     (diary.district || '').toLowerCase().includes(q) ||
+                                     (diary.dateOfCd || '').toLowerCase().includes(q);
+                            })
+                            .map((diary) => {
+                              const isSelected = selectedDiaryId === diary.id;
+                              return (
+                                <div
+                                  key={diary.id}
+                                  onClick={() => setSelectedDiaryId(diary.id)}
+                                  className="group px-3 py-2.5 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer"
+                                  style={isSelected ? {
+                                    background: 'var(--th-primary)',
+                                    color: 'white',
+                                    borderColor: 'var(--th-primary)'
+                                  } : {
+                                    background: 'var(--th-surface)',
+                                    color: 'var(--th-text2)',
+                                    borderColor: 'var(--th-border)'
+                                  }}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    <FileText className="w-4 h-4 shrink-0" style={{ color: isSelected ? 'white' : 'var(--th-primary)' }} />
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-xs font-bold truncate">
+                                        {diary.crNoAndSecOfLaw.split(' ')[0] || diary.crNoAndSecOfLaw || 'Case Record'}
+                                      </p>
+                                      <p className="text-[10px] opacity-75 truncate">
+                                        {diary.dateOfCd || 'No Date'} • {diary.policeStation || 'N/A'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  
+                                  <button
+                                    onClick={(e) => handleDeleteWorkspaceDiary(diary.id, e)}
+                                    className={`p-1 rounded-md transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer ${
+                                      isSelected
+                                        ? 'text-white/80 hover:text-white hover:bg-white/20'
+                                        : 'text-gray-400 hover:text-red-500 hover:bg-red-55'
+                                    }`}
+                                    title="Remove from Workspace"
+                                  >
+                                    <Trash className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          {diaries.filter(diary => {
+                            const q = searchQuery.toLowerCase().trim();
+                            if (!q) return true;
+                            return (diary.crNoAndSecOfLaw || '').toLowerCase().includes(q) ||
+                                   (diary.policeStation || '').toLowerCase().includes(q) ||
+                                   (diary.district || '').toLowerCase().includes(q) ||
+                                   (diary.dateOfCd || '').toLowerCase().includes(q);
+                          }).length === 0 && (
+                            <p className="text-xs text-center py-4 italic" style={{ color: 'var(--th-text4)' }}>No matching cases.</p>
+                          )}
+                        </div>
+
+                        {/* Bottom Actions */}
+                        <div className="border-t pt-4 flex flex-col gap-2" style={{ borderColor: 'var(--th-border)' }}>
+                          <button
+                            onClick={handleExportAllToZip}
+                            disabled={isBulkExporting}
+                            className="w-full bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-50"
+                          >
+                            <FileDown className="w-4 h-4 text-gray-400" />
+                            {isBulkExporting ? 'Exporting ZIP...' : 'Export Workspace ZIP'}
+                          </button>
+                          
+                          <button
+                            onClick={() => handleDownloadAllDocx(diaries, `Combined-Case-Diaries-${Date.now()}`)}
+                            className="w-full text-white text-xs font-bold py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-sm hover:shadow transition-all"
+                            style={{ background: 'var(--th-primary)' }}
+                          >
+                            <FileDown className="w-4 h-4" />
+                            Export Combined Word ({diaries.length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Right Panel: Editor Form */}
+                      <div className="flex-1 w-full flex flex-col gap-6">
+                        {activeDiary ? (
+                          <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                            {/* Database active session indicator banner */}
+                            {loadedDbId && (
+                              <div className="mb-4 border rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
+                                <div className="flex items-center gap-2">
+                                  <Database className="w-4 h-4 shrink-0" style={{ color: 'var(--th-primary)' }} />
+                                  <div>
+                                    <p className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Active Database Session: <span className="underline">{loadedDbName}</span></p>
+                                    <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Any changes you make here can be synced directly back to your database library.</p>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={handleUpdateDatabase}
+                                  className="text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                                  style={{ background: 'var(--th-primary)' }}
+                                >
+                                  <Save className="w-3.5 h-3.5" />
+                                  Sync Updates to DB
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Database Save Status Feedback Notification */}
+                            {saveDbStatus.message && (
+                              <div className={`mb-4 p-4 border rounded-2xl flex items-center gap-2.5 text-xs font-semibold shadow-xs ${
+                                saveDbStatus.type === 'success' 
+                                  ? 'bg-green-50 border-green-100 text-green-700' 
+                                  : saveDbStatus.type === 'error'
+                                  ? 'bg-red-55 border-red-100 text-red-750'
+                                  : 'bg-indigo-50 border-indigo-100 text-indigo-700'
+                              }`}>
+                                {saveDbStatus.type === 'loading' ? (
+                                  <RefreshCw className="w-4 h-4 animate-spin shrink-0 text-indigo-600" />
+                                ) : saveDbStatus.type === 'success' ? (
+                                  <Check className="w-4 h-4 shrink-0 text-green-600" />
+                                ) : (
+                                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                                )}
+                                <span>{saveDbStatus.message}</span>
+                              </div>
+                            )}
+
+                            {/* Workspace Header Actions */}
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b" style={{ borderColor: 'var(--th-border)' }}>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="px-2 py-0.5 bg-green-50 text-green-700 text-[10px] font-bold rounded-md border border-green-200/50">VERIFIED PREVIEW</span>
+                                  <span className="text-[10px] font-semibold" style={{ color: 'var(--th-text4)' }}>{activeDiary.dateOfCd}</span>
+                                </div>
+                                <h2 className="font-display font-bold text-lg mt-1" style={{ color: 'var(--th-text)' }}>{activeDiary.crNoAndSecOfLaw}</h2>
+                                <p className="text-xs font-medium" style={{ color: 'var(--th-text4)' }}>Reconstructed Case Diary • Station: {activeDiary.policeStation}</p>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-stretch sm:self-auto justify-end">
+                                {loadedDbId ? (
+                                  <button
+                                    onClick={handleUpdateDatabase}
+                                    className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                                    style={{ background: 'var(--th-primary)' }}
+                                  >
+                                    <Save className="w-3.5 h-3.5" />
+                                    Sync Updates to DB
+                                  </button>
+                                ) : (
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <input
+                                      type="text"
+                                      placeholder="DB Name..."
+                                      value={dbNameInput}
+                                      onChange={(e) => setDbNameInput(e.target.value)}
+                                      className="bg-white border focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-gray-900 shadow-sm"
+                                      style={{ width: '130px', height: '36px', borderColor: 'var(--th-border)' }}
+                                    />
+                                    <button
+                                      onClick={handleSaveToDatabase}
+                                      className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                                      style={{ background: 'var(--th-primary)' }}
+                                    >
+                                      <Save className="w-3.5 h-3.5" />
+                                      Save DB
+                                    </button>
+                                  </div>
+                                )}
+
+                                <button
+                                  id="save-draft-btn"
+                                  onClick={saveWorkspaceChanges}
+                                  className="border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
+                                >
+                                  {isSaved ? (
+                                    <>
+                                      <Check className="w-4 h-4 text-green-600" />
+                                      <span className="text-green-700">Changes Saved!</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Save className="w-4 h-4 text-gray-400" />
+                                      Save Draft
+                                    </>
+                                  )}
+                                </button>
+
+                                <button
+                                  id="export-docx-btn"
+                                  onClick={() => handleDownloadDocx(activeDiary)}
+                                  className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                                  title="Export the currently viewed case diary to Word"
+                                >
+                                  <FileDown className="w-4 h-4 text-gray-400" />
+                                  Export Case Word
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Interactive Case Diary Document Form */}
+                            <div className="space-y-6 mt-6 max-h-[680px] overflow-y-auto pr-1">
+                              {/* Section 1: Headers */}
+                              <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>I. Administration & Registry</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <OutlinedInput
+                                    label="Police Station"
+                                    value={activeDiary.policeStation}
+                                    onChange={(e) => handleFieldChange('policeStation', e.target.value)}
+                                    onClear={() => handleFieldChange('policeStation', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="District"
+                                    value={activeDiary.district}
+                                    onChange={(e) => handleFieldChange('district', e.target.value)}
+                                    onClear={() => handleFieldChange('district', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="CR. No. & Sec of Law"
+                                    value={activeDiary.crNoAndSecOfLaw}
+                                    onChange={(e) => handleFieldChange('crNoAndSecOfLaw', e.target.value)}
+                                    onClear={() => handleFieldChange('crNoAndSecOfLaw', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="Date of CD"
+                                    value={activeDiary.dateOfCd}
+                                    onChange={(e) => handleFieldChange('dateOfCd', e.target.value)}
+                                    onClear={() => handleFieldChange('dateOfCd', '')}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Section 2: General parameters */}
+                              <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>II. Occurrence & Complainant Details</h4>
+                                <div className="space-y-4">
+                                  <OutlinedTextarea
+                                    label="Date, Time & Place of Occurrence"
+                                    value={activeDiary.dateTimeAndPlaceOfOccurrence}
+                                    onChange={(e) => handleFieldChange('dateTimeAndPlaceOfOccurrence', e.target.value)}
+                                    rows={2}
+                                  />
+                                  <OutlinedInput
+                                    label="Date of Report / Time"
+                                    value={activeDiary.dateOfReportTime}
+                                    onChange={(e) => handleFieldChange('dateOfReportTime', e.target.value)}
+                                    onClear={() => handleFieldChange('dateOfReportTime', '')}
+                                  />
+                                  <OutlinedTextarea
+                                    label="II. Complainant"
+                                    value={activeDiary.complainant}
+                                    onChange={(e) => handleFieldChange('complainant', e.target.value)}
+                                    rows={2}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Section 3: Accused List Table */}
+                              <div className="p-4 border rounded-xl space-y-3.5" style={{ borderColor: 'var(--th-border)' }}>
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>III. Accused Details</h4>
+                                  <button
+                                    onClick={addAccusedRow}
+                                    className="text-[10px] font-bold px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors"
+                                    style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    Add Accused
+                                  </button>
+                                </div>
+
+                                <div className="space-y-3">
+                                  {activeDiary.accusedList.map((acc, index) => (
+                                    <div key={index} className="flex gap-2 items-center p-2.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                      <span className="text-[11px] font-bold text-gray-400 w-6 text-center">{acc.sNo}</span>
+                                      <OutlinedInput
+                                        label={`Accused ${acc.sNo} Name & Address`}
+                                        value={acc.nameAndAddress}
+                                        onChange={(e) => handleAccusedChange(index, 'nameAndAddress', e.target.value)}
+                                        className="flex-1"
+                                      />
+                                      <button
+                                        onClick={() => removeAccusedRow(index)}
+                                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                        title="Delete Accused Row"
+                                      >
+                                        <Trash className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                  {activeDiary.accusedList.length === 0 && (
+                                    <p className="text-[10px] text-gray-450 text-center py-2 italic bg-gray-50/50 rounded-lg">No accused registered. Click "Add Accused" to define.</p>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Section 4: Property Details */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="p-4 border border-gray-200 rounded-xl">
+                                  <OutlinedTextarea
+                                    label="IV. Property Lost Details"
+                                    value={activeDiary.propertyLostDetails}
+                                    onChange={(e) => handleFieldChange('propertyLostDetails', e.target.value)}
+                                    onVoiceClick={() => toggleVoiceTyping('propertyLostDetails')}
+                                    isListening={listeningField === 'propertyLostDetails'}
+                                    rows={2}
+                                  />
+                                </div>
+                                <div className="p-4 border border-gray-200 rounded-xl">
+                                  <OutlinedTextarea
+                                    label="V. Recovered Property Details"
+                                    value={activeDiary.recoveredPropertyDetails}
+                                    onChange={(e) => handleFieldChange('recoveredPropertyDetails', e.target.value)}
+                                    onVoiceClick={() => toggleVoiceTyping('recoveredPropertyDetails')}
+                                    isListening={listeningField === 'recoveredPropertyDetails'}
+                                    rows={2}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Section 5: Stage of Case and Court specifics */}
+                              <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>VI. Stage & Court Administration</h4>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const targetVal = activeDiary.stageOfTheCase === 'CASE DISPOSED' ? 'PENDING TRIAL' : 'CASE DISPOSED';
+                                      handleFieldChange('stageOfTheCase', targetVal);
+                                      if (targetVal === 'CASE DISPOSED') {
+                                        handleFieldChange('nextHearingDate', '');
+                                      }
+                                    }}
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
+                                      activeDiary.stageOfTheCase === 'CASE DISPOSED'
+                                        ? 'bg-red-500 text-white border-red-600 shadow-xs'
+                                        : 'bg-red-55 text-red-750 border-red-200 hover:bg-red-100'
+                                    }`}
+                                    title="Click to dispose of this case immediately"
+                                  >
+                                    {activeDiary.stageOfTheCase === 'CASE DISPOSED' ? '✓ Case Disposed' : 'Case Disposed'}
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <OutlinedInput
+                                    label="Stage of the Case"
+                                    value={activeDiary.stageOfTheCase}
+                                    onChange={(e) => handleFieldChange('stageOfTheCase', e.target.value)}
+                                    onClear={() => handleFieldChange('stageOfTheCase', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="Court Ref. No."
+                                    value={activeDiary.courtRefNo}
+                                    onChange={(e) => handleFieldChange('courtRefNo', e.target.value)}
+                                    onClear={() => handleFieldChange('courtRefNo', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="Hearing No."
+                                    value={activeDiary.hearingNo}
+                                    onChange={(e) => handleFieldChange('hearingNo', e.target.value)}
+                                    onClear={() => handleFieldChange('hearingNo', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="Court Name & Place"
+                                    value={activeDiary.courtNameAndPlace}
+                                    onChange={(e) => handleFieldChange('courtNameAndPlace', e.target.value)}
+                                    onClear={() => handleFieldChange('courtNameAndPlace', '')}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Section 6: Specific Hearing Checks (Boolean YES/NO switches) */}
+                              <div className="p-4 border rounded-xl space-y-4" style={{ borderColor: 'var(--th-border)' }}>
+                                <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>Hearing Parameters & Checks</h4>
+                                
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>Magistrate Present?</label>
+                                    <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFieldChange('whetherMagistratePresent', 'YES')}
+                                        className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                        style={activeDiary.whetherMagistratePresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
+                                      >
+                                        YES
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFieldChange('whetherMagistratePresent', 'NO')}
+                                        className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                        style={activeDiary.whetherMagistratePresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
+                                      >
+                                        NO
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>APP / PP Present?</label>
+                                    <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFieldChange('whetherAppPpPresent', 'YES')}
+                                        className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                        style={activeDiary.whetherAppPpPresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
+                                      >
+                                        YES
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFieldChange('whetherAppPpPresent', 'NO')}
+                                        className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                        style={activeDiary.whetherAppPpPresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
+                                      >
+                                        NO
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>Defence Counsel Present?</label>
+                                    <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'YES')}
+                                        className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                        style={activeDiary.whetherDefenceCounselPresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
+                                      >
+                                        YES
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'NO')}
+                                        className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                        style={activeDiary.whetherDefenceCounselPresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
+                                      >
+                                        NO
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
+                                  <OutlinedInput
+                                    label="PWs Cited"
+                                    value={activeDiary.noOfPwsCited}
+                                    onChange={(e) => handleFieldChange('noOfPwsCited', e.target.value)}
+                                  />
+                                  <OutlinedInput
+                                    label="PWs Examined So Far"
+                                    value={activeDiary.noOfPwsExaminedSoFar}
+                                    onChange={(e) => handleFieldChange('noOfPwsExaminedSoFar', e.target.value)}
+                                  />
+                                  <OutlinedInput
+                                    label="Accused Charged"
+                                    value={activeDiary.totalNoOfAccusedCharged}
+                                    onChange={(e) => handleFieldChange('totalNoOfAccusedCharged', e.target.value)}
+                                  />
+                                  <OutlinedInput
+                                    label="Accused Present"
+                                    value={activeDiary.noOfAccusedPresent}
+                                    onChange={(e) => handleFieldChange('noOfAccusedPresent', e.target.value)}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Section 7: Case Remarks Multi-line */}
+                              <div className="p-4 border border-indigo-200 bg-indigo-50/10 rounded-xl space-y-2">
+                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                  <label className="block text-[10px] font-bold text-indigo-705 uppercase tracking-wider">
+                                    REMARKS & TAMIL TRANSCRIPTION
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={toggleRemarksVoiceTyping}
+                                    className={`flex items-center justify-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer border ${
+                                      isListeningRemarks 
+                                        ? 'bg-red-500 hover:bg-red-650 text-white border-red-600 animate-pulse'
+                                        : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 shadow-xs'
+                                    }`}
+                                    title="Tamil Voice Typing"
+                                  >
+                                    {isListeningRemarks ? (
+                                      <>
+                                        <MicOff className="w-3.5 h-3.5" />
+                                        Stop Listening
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Mic className="w-3.5 h-3.5 text-indigo-500" />
+                                        Tamil Voice Typing (பேசவும்)
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+                                <p className="text-[9.5px] text-gray-400 font-medium">
+                                  Preserve typewriter records, signatures, and fine payments clearly. Supports complete line breaks.
+                                </p>
+                                <textarea
+                                  rows={8}
+                                  value={activeDiary.remarks}
+                                  onChange={(e) => handleFieldChange('remarks', e.target.value)}
+                                  className="mt-2 w-full bg-white border border-gray-250 rounded-xl p-3.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
+                                  style={{ borderColor: 'var(--th-border)' }}
+                                  placeholder="Insert case diary remarks, typewriter transcripts, or hand-written summaries"
+                                />
+                              </div>
+
+                              {/* Section 8: Posted & Future Hearing parameters */}
+                              <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">Posted Parameters & Next Hearing</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                  <OutlinedInput
+                                    label="Posted For"
+                                    value={activeDiary.postedFor}
+                                    onChange={(e) => handleFieldChange('postedFor', e.target.value)}
+                                    onClear={() => handleFieldChange('postedFor', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="Next Hearing Date"
+                                    value={activeDiary.nextHearingDate}
+                                    onChange={(e) => handleFieldChange('nextHearingDate', e.target.value)}
+                                    onClear={() => handleFieldChange('nextHearingDate', '')}
+                                  />
+                                  <OutlinedInput
+                                    label="Attended By"
+                                    value={activeDiary.attendedBy}
+                                    onChange={(e) => handleFieldChange('attendedBy', e.target.value)}
+                                    onClear={() => handleFieldChange('attendedBy', '')}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Pinned Bottom Action Buttons */}
+                            <div className="flex flex-wrap items-center gap-2.5 shrink-0 justify-end pt-5 border-t mt-5" style={{ borderColor: 'var(--th-border)' }}>
+                              {loadedDbId ? (
+                                <button
+                                  onClick={handleUpdateDatabase}
+                                  className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                                  style={{ background: 'var(--th-primary)' }}
+                                >
+                                  <Save className="w-3.5 h-3.5" />
+                                  Sync Updates to DB
+                                </button>
+                              ) : (
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <input
+                                    type="text"
+                                    placeholder="DB Name..."
+                                    value={dbNameInput}
+                                    onChange={(e) => setDbNameInput(e.target.value)}
+                                    className="bg-white border focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-gray-900 shadow-sm"
+                                    style={{ width: '130px', height: '36px', borderColor: 'var(--th-border)' }}
+                                  />
+                                  <button
+                                    onClick={handleSaveToDatabase}
+                                    className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                                    style={{ background: 'var(--th-primary)' }}
+                                  >
+                                    <Save className="w-3.5 h-3.5" />
+                                    Save DB
+                                  </button>
+                                </div>
+                              )}
+                              <button
+                                id="save-draft-btn-bottom"
+                                onClick={saveWorkspaceChanges}
+                                className="border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
+                              >
+                                {isSaved ? (
+                                  <>
+                                    <Check className="w-4 h-4 text-green-600" />
+                                    <span className="text-green-700">Changes Saved!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Save className="w-4 h-4 text-gray-400" />
+                                    Save Draft
+                                  </>
+                                )}
+                              </button>
+
+                              <button
+                                id="export-docx-btn-bottom"
+                                onClick={() => handleDownloadDocx(activeDiary)}
+                                className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                                title="Export the currently viewed case diary to Word"
+                              >
+                                <FileDown className="w-4 h-4 text-gray-400" />
+                                Export Case Word
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="backdrop-blur-md border rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center flex-1 animate-fade-in" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                            <FileText className="w-12 h-12 mb-3" style={{ color: 'var(--th-primary)' }} />
+                            <p className="text-sm font-semibold" style={{ color: 'var(--th-text2)' }}>No case selected</p>
+                            <p className="text-xs mt-1" style={{ color: 'var(--th-text4)' }}>Select a case record from the left sidebar to start editing.</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -3077,14 +3085,13 @@ export default function App() {
                             Active Share Permissions
                           </span>
                           
-                          {Object.keys(adminAccessMap).length === 0 || 
-                           Object.values(adminAccessMap).every(list => list.length === 0) ? (
+                          {Object.keys(adminAccessMap).length === 0 || (Object.values(adminAccessMap) as string[][]).every(list => list.length === 0) ? (
                             <p className="text-xs text-gray-400 font-medium italic bg-white py-4 text-center rounded-xl border border-gray-200/50">
                               No sharing permissions assigned. Use the form above to grant access.
                             </p>
                           ) : (
                             <div className="grid grid-cols-1 gap-3 max-h-[300px] overflow-y-auto pr-1">
-                              {Object.entries(adminAccessMap).map(([email, dbIds]) => {
+                              {(Object.entries(adminAccessMap) as [string, string[]][]).map(([email, dbIds]) => {
                                 if (!dbIds || dbIds.length === 0) return null;
                                 return (
                                   <div

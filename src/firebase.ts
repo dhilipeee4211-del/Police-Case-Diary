@@ -39,8 +39,13 @@ export { db };
 
 // Flag to indicate if we are in the middle of a sign-in flow.
 let isSigningIn = false;
-// Cache the access token in memory.
+// Cache the access token in memory and local storage.
 let cachedAccessToken: string | null = null;
+try {
+  cachedAccessToken = localStorage.getItem('firebase_access_token');
+} catch (e) {
+  console.warn('localStorage not available', e);
+}
 
 // Initialize auth state listener. Call this on app load.
 export const initAuth = (
@@ -62,10 +67,16 @@ export const initAuth = (
         if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
       } else if (!isSigningIn) {
         cachedAccessToken = null;
+        try {
+          localStorage.removeItem('firebase_access_token');
+        } catch (e) {}
         if (onAuthFailure) onAuthFailure();
       }
     } else {
       cachedAccessToken = null;
+      try {
+        localStorage.removeItem('firebase_access_token');
+      } catch (e) {}
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -86,6 +97,9 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
 
     cachedAccessToken = credential.accessToken;
+    try {
+      localStorage.setItem('firebase_access_token', cachedAccessToken);
+    } catch (e) {}
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Sign in error:', error);
@@ -104,4 +118,7 @@ export const logout = async () => {
     await auth.signOut();
   }
   cachedAccessToken = null;
+  try {
+    localStorage.removeItem('firebase_access_token');
+  } catch (e) {}
 };
