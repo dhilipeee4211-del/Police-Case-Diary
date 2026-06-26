@@ -624,15 +624,16 @@ export default function App() {
 
     let progressInterval: NodeJS.Timeout | null = null;
 
+    let fileBuffer: ArrayBuffer | null = null;
     try {
       let result: any = null;
 
-      // Pre-check page count client-side to enforce limits and guide the user
+      // Pre-check page count client-side and guide the user
       let numPages = 0;
       try {
         const pdfjsLib = await loadPdfJs();
-        const arrayBuffer = await selectedFile.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        fileBuffer = await selectedFile.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: fileBuffer }).promise;
         numPages = pdf.numPages;
         addLocalLog(`Verified PDF structure: ${numPages} page(s) found.`, 'SYSTEM');
         if (numPages > 50) {
@@ -640,12 +641,6 @@ export default function App() {
         }
       } catch (err: any) {
         console.warn("Failed to precheck page count client-side:", err);
-      }
-
-      if (numPages > 20 && extractionMode === 'direct') {
-        addLocalLog(`Warning: Cloud Upload (Direct) mode is limited to 20 pages to prevent serverless timeouts.`, 'ERROR');
-        addLocalLog(`Please switch the extraction option to 'Unlimited Free (Local Browser OCR)' to process this ${numPages}-page document.`, 'SYSTEM');
-        throw new Error(`Direct Cloud Upload is restricted to 20 pages due to serverless timeouts. Please select the 'Unlimited Free (Local Browser OCR)' option instead.`);
       }
 
       if (extractionMode === 'free') {
@@ -787,109 +782,127 @@ export default function App() {
         };
       } else {
         // Mode A: Direct Cloud Upload (Multi-modal Gemini Direct Extraction)
-        setExtractionStep('Uploading Case Diary & Setting up Security Context...');
+        setExtractionStep('Initializing Direct Document Gateway...');
+        addLocalLog('Reading file structure into memory buffer...', 'INFO');
         
-        // Progress bar simulation interval
-        let progressVal = 5;
-        let lastLoggedVal = 0;
-        progressInterval = setInterval(() => {
-          progressVal += Math.floor(Math.random() * 8) + 3;
-          if (progressVal > 95) {
-            progressVal = 95;
+        let fileBufferVal = fileBuffer;
+        if (!fileBufferVal) {
+          fileBufferVal = await selectedFile.arrayBuffer();
+        }
+        
+        const { PDFDocument } = await import('pdf-lib');
+        addLocalLog('Parsing PDF pages into direct multi-modal processing gateway...', 'SYSTEM');
+        const srcDoc = await PDFDocument.load(fileBufferVal);
+        const pageCount = srcDoc.getPageCount();
+        
+        const chunkSize = 2;
+        const chunks: string[] = []; // Array of base64 PDF chunks
+        
+        for (let i = 0; i < pageCount; i += chunkSize) {
+          const newDoc = await PDFDocument.create();
+          const pagesToCopy = Array.from(
+            { length: Math.min(chunkSize, pageCount - i) },
+            (_, idx) => i + idx
+          );
+          const copiedPages = await newDoc.copyPages(srcDoc, pagesToCopy);
+          copiedPages.forEach(page => newDoc.addPage(page));
+          const newPdfBytes = await newDoc.save();
+          
+          // Convert Uint8Array to base64 string
+          let binary = '';
+          const len = newPdfBytes.byteLength;
+          for (let k = 0; k < len; k++) {
+            binary += String.fromCharCode(newPdfBytes[k]);
           }
-          setExtractionProgress(progressVal);
-
-          // Dynamically select steps based on current simulated progress
-          if (progressVal <= 18) {
-            setExtractionStep('Uploading Case Diary & Setting up Security Context...');
-            if (lastLoggedVal < 5) {
-              addLocalLog('Uploading base64 document payload stream directly to cloud gateway...', 'SYSTEM');
-              addLocalLog(`Payload size: ${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`, 'SYSTEM');
-              lastLoggedVal = 5;
+          const base64 = window.btoa(binary);
+          chunks.push(base64);
+        }
+        
+        addLocalLog(`Segmented document into ${chunks.length} multi-modal upload batch(es) (maximum ${chunkSize} pages per batch).`, 'SYSTEM');
+        
+        const allData: any[] = [];
+        let fallbackUsed = false;
+        let fallbackMsg = "";
+        
+        for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+          const chunk = chunks[cIdx];
+          const startPage = cIdx * chunkSize + 1;
+          const endPage = Math.min((cIdx + 1) * chunkSize, pageCount);
+          
+          addLocalLog(`Uploading batch ${cIdx + 1} of ${chunks.length} (Pages ${startPage} to ${endPage}) to Gemini direct gateway...`, 'AI');
+          setExtractionStep(`Extracting batch ${cIdx + 1}/${chunks.length} (Pages ${startPage}-${endPage})...`);
+          
+          const baseProgress = 10 + Math.floor((cIdx / chunks.length) * 88);
+          setExtractionProgress(baseProgress);
+          
+          let response: Response;
+          let retriesLeft = 4;
+          let delayMs = 3000;
+          
+          while (true) {
+            response = await fetch('/api/extract', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                file: chunk,
+                filename: `batch-${cIdx + 1}.pdf`,
+              }),
+            });
+            
+            if (response.ok) {
+              break;
             }
-          } else if (progressVal <= 38) {
-            setExtractionStep('Performing OCR Layout and Hand-written Aligned Parsing...');
-            if (lastLoggedVal < 20) {
-              addLocalLog('Performing deep multimodal OCR rasterization on cloud instances...', 'OCR');
-              addLocalLog('Segmenting handwritten logs and printed headers...', 'OCR');
-              lastLoggedVal = 20;
+            
+            const isRateLimited = response.status === 429;
+            const isServerError = response.status >= 500;
+            
+            if (retriesLeft > 0 && (isRateLimited || isServerError)) {
+              const reason = isRateLimited ? "Rate limit (429)" : `Server status (${response.status})`;
+              addLocalLog(`${reason} encountered. Retrying batch ${cIdx + 1} in ${delayMs / 1000}s... (${retriesLeft} retries left)`, 'SYSTEM');
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+              retriesLeft--;
+              delayMs *= 2;
+            } else {
+              const errorText = await response.text();
+              throw new Error(errorText || `Direct extraction failed for batch ${cIdx + 1} (${response.status})`);
             }
-          } else if (progressVal <= 58) {
-            setExtractionStep('Consulting Google Gemini Language Intelligence Engine...');
-            if (lastLoggedVal < 40) {
-              addLocalLog('Submitting raster images to Gemini 2.5 Flash...', 'AI');
-              addLocalLog('Validating schema and structure contexts...', 'AI');
-              lastLoggedVal = 40;
+          }
+          
+          const contentType = response.headers.get('content-type') || '';
+          if (!contentType.includes('application/json')) {
+            const responseText = await response.text();
+            if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
+              throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
             }
-          } else if (progressVal <= 78) {
-            setExtractionStep('Translating bilingual segments & form structures...');
-            if (lastLoggedVal < 60) {
-              addLocalLog('Scanning for Tamil vernacular texts in Remarks sections...', 'AI');
-              addLocalLog('Aligning bilingual translation schemas (Tamil and English indexes)...', 'AI');
-              lastLoggedVal = 60;
-            }
-          } else if (progressVal <= 92) {
-            setExtractionStep('Reconstructing complex police diary database records...');
-            if (lastLoggedVal < 80) {
-              addLocalLog('Generating clean JSON templates matching database schema rules...', 'RECONSTRUCT');
-              addLocalLog('Parsing witness examination logs...', 'RECONSTRUCT');
-              lastLoggedVal = 80;
+            throw new Error(`Expected JSON response, but received content-type "${contentType}" for batch ${cIdx + 1}`);
+          }
+          
+          const chunkResult = await response.json();
+          if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
+            allData.push(...chunkResult.data);
+            if (chunkResult.fallbackUsed) {
+              fallbackUsed = true;
+              fallbackMsg = chunkResult.message || fallbackMsg;
             }
           } else {
-            setExtractionStep('Aligning and mapping structured tables...');
-            if (lastLoggedVal < 93) {
-              addLocalLog('Validating layout schema consistency...', 'SYSTEM');
-              lastLoggedVal = 93;
-            }
+            throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
           }
-        }, 350);
 
-        // Helper to read file as base64 string
-        const fileToBase64 = (file: File): Promise<string> => {
-          return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => {
-              const base64String = reader.result as string;
-              const base64 = base64String.split(',')[1];
-              resolve(base64);
-            };
-            reader.onerror = (error) => reject(error);
-          });
+          // Add pacing delay to prevent hitting Gemini's 15 RPM free tier rate limit
+          if (cIdx < chunks.length - 1) {
+            addLocalLog(`Pacing request flow... Waiting 2.5s before next batch...`, 'SYSTEM');
+            await new Promise(resolve => setTimeout(resolve, 2500));
+          }
+        }
+        
+        result = {
+          success: true,
+          data: allData,
+          fallbackUsed,
+          message: fallbackMsg
         };
-
-        const base64Data = await fileToBase64(selectedFile);
-        const response = await fetch('/api/extract', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            file: base64Data,
-            filename: selectedFile.name,
-          }),
-        });
-
-        if (progressInterval) clearInterval(progressInterval);
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          if (response.status === 413 || errorText.includes('TOO_LARGE')) {
-            throw new Error('This PDF file exceeds the Vercel server upload size limit. Please switch to the "Unlimited Free (Client-Side OCR)" option above, which can process files of any size without limitations.');
-          }
-          throw new Error(errorText || `Reconstruction failed (${response.status})`);
-        }
-
-        const contentType = response.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          const responseText = await response.text();
-          if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
-            throw new Error('The backend server returned an HTML page instead of JSON. This usually indicates that the server is restarting, overloaded, or experiencing high demand. Please try again in a few seconds.');
-          }
-          throw new Error(`Expected JSON response, but received content-type "${contentType}" with body: ${responseText.substring(0, 200)}`);
-        }
-
-        result = await response.json();
       }
 
       if (result && result.success && Array.isArray(result.data)) {
