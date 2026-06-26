@@ -784,16 +784,9 @@ app.get('/api/db/list', async (req, res) => {
 
     if (!supabaseServerClient) {
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      const dbsForClient = localDbs.map((db: any) => ({
-        id: db.id,
-        userId: db.userId,
-        name: db.name,
-        createdAt: db.createdAt,
-        diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
-      }));
       return res.json({ 
         success: true, 
-        databases: dbsForClient, 
+        databases: localDbs, 
         source: 'disk',
         error: null 
       });
@@ -864,36 +857,15 @@ app.get('/api/db/list', async (req, res) => {
         finalDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
         console.log(`Loaded ${finalDbs.length} databases (merged Supabase and local cache) for user ${userId} (${userEmail})`);
         
-        const dbsForClient = finalDbs.map((db: any) => ({
-          id: db.id,
-          userId: db.userId,
-          name: db.name,
-          createdAt: db.createdAt,
-          diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
-        }));
-        return res.json({ success: true, databases: dbsForClient, source: 'supabase_merged' });
+        return res.json({ success: true, databases: finalDbs, source: 'supabase_merged' });
       }
 
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      const dbsForClient = localDbs.map((db: any) => ({
-        id: db.id,
-        userId: db.userId,
-        name: db.name,
-        createdAt: db.createdAt,
-        diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
-      }));
-      return res.json({ success: true, databases: dbsForClient, source: 'disk' });
+      return res.json({ success: true, databases: localDbs, source: 'disk' });
     } catch (err: any) {
       console.log('Supabase fetch exception, falling back to disk:', err);
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      const dbsForClient = localDbs.map((db: any) => ({
-        id: db.id,
-        userId: db.userId,
-        name: db.name,
-        createdAt: db.createdAt,
-        diaryCount: Array.isArray(db.diaries) ? db.diaries.length : 0
-      }));
-      return res.json({ success: true, databases: dbsForClient, source: 'disk', error: err.message });
+      return res.json({ success: true, databases: localDbs, source: 'disk', error: err.message });
     }
   } catch (err) {
     console.error('Error in /api/db/list:', err);

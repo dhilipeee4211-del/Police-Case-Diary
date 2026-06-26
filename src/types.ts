@@ -35,6 +35,7 @@ export interface CaseDiary {
   nextHearingDate: string;
   attendedBy: string;
   isSavedDraft?: boolean;
+  dbId?: string;
 }
 
 export interface SavedDatabase {

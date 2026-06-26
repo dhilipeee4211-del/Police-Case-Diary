@@ -792,12 +792,55 @@ export default function App() {
     try {
       const dbs = await getSavedDatabases(uid, email);
       setSavedDatabases(dbs);
+
+      // Automatically load all cases from all saved databases into workspace
+      const allDiaries: CaseDiary[] = [];
+      dbs.forEach(db => {
+        if (db.diaries && Array.isArray(db.diaries)) {
+          db.diaries.forEach(diary => {
+            allDiaries.push({
+              ...diary,
+              dbId: db.id
+            });
+          });
+        }
+      });
+      setDiaries(allDiaries);
+      
+      if (allDiaries.length > 0) {
+        setSelectedDiaryId(allDiaries[0].id);
+      } else {
+        setSelectedDiaryId(null);
+      }
     } catch (err) {
       console.error('Error loading databases:', err);
     } finally {
       setIsLoadingDbs(false);
     }
   };
+
+  // Synchronize active database session indicators with selected diary's dbId
+  useEffect(() => {
+    if (!selectedDiaryId || diaries.length === 0) {
+      setLoadedDbId(null);
+      setLoadedDbName(null);
+      return;
+    }
+    const active = diaries.find((d) => d.id === selectedDiaryId);
+    if (active && active.dbId) {
+      const dbItem = savedDatabases.find((db) => db.id === active.dbId);
+      if (dbItem) {
+        setLoadedDbId(dbItem.id);
+        setLoadedDbName(dbItem.name);
+      } else {
+        setLoadedDbId(active.dbId);
+        setLoadedDbName("Database");
+      }
+    } else {
+      setLoadedDbId(null);
+      setLoadedDbName(null);
+    }
+  }, [selectedDiaryId, diaries, savedDatabases]);
 
   const fetchAccessMap = async () => {
     if (user?.email !== 'dhilipeee4211@gmail.com') return;
@@ -871,21 +914,35 @@ export default function App() {
       try {
         let currentDbId = loadedDbId;
         let currentDbName = loadedDbName;
+        const activeDiary = diaries.find(d => d.id === selectedDiaryId);
 
-        if (!currentDbId) {
+        if (!currentDbId && activeDiary) {
           // Auto-initialize a new database session
-          const firstDiary = diaries[0];
-          const crimeNo = (firstDiary.crNoAndSecOfLaw || 'Diary').split(',')[0].replace(/[\/\\?%*:|"<>]/g, '-').trim();
-          const station = firstDiary.policeStation || 'Record';
+          const crimeNo = (activeDiary.crNoAndSecOfLaw || 'Diary').split(',')[0].replace(/[\/\\?%*:|"<>]/g, '-').trim();
+          const station = activeDiary.policeStation || 'Record';
           currentDbName = `Database - CR No ${crimeNo} - ${station}`;
           currentDbId = `db-${Date.now()}`;
 
           setLoadedDbId(currentDbId);
           setLoadedDbName(currentDbName);
           setDbNameInput(currentDbName);
+
+          // Tag this diary with dbId in diaries state
+          setDiaries(prev => prev.map(d => d.id === activeDiary.id ? { ...d, dbId: currentDbId } : d));
         }
 
-        const saved = await saveSavedDatabase(currentDbName || "Database", diaries, user.uid, currentDbId);
+        const targetDbId = currentDbId;
+        if (!targetDbId) return;
+
+        // Filter diaries belonging to this database session
+        const dbDiaries = diaries.map(d => {
+          if (d.id === activeDiary?.id && !d.dbId) {
+            return { ...d, dbId: targetDbId };
+          }
+          return d;
+        }).filter(d => d.dbId === targetDbId);
+
+        const saved = await saveSavedDatabase(currentDbName || "Database", dbDiaries, user.uid, targetDbId);
         setSavedDatabases((prev) => {
           const filtered = prev.filter(db => db.id !== saved.id);
           return [saved, ...filtered];
@@ -898,7 +955,7 @@ export default function App() {
     }, 2000); // 2 second debounce of field edits
 
     return () => clearTimeout(timer);
-  }, [diaries, loadedDbId, isSaved, user, loadedDbName]);
+  }, [diaries, loadedDbId, isSaved, user, loadedDbName, selectedDiaryId]);
 
   const handleSaveToDatabase = async () => {
     if (!user) {
@@ -917,11 +974,15 @@ export default function App() {
 
     setSaveDbStatus({ type: 'loading', message: 'Saving to your secure database library...' });
     try {
+      // Filter out diaries that do NOT have a dbId, fall back to all if all/none have it
+      const unsavedDiaries = diaries.filter(d => !d.dbId);
+      const diariesToSave = unsavedDiaries.length > 0 ? unsavedDiaries : diaries;
+
       // Find if there is an existing database under the same Crime Number and Police Station head
       const existingDb = savedDatabases.find((db) => {
         if (db.name.trim().toLowerCase() === name.toLowerCase()) return true;
         return db.diaries.some((d) => 
-          diaries.some((newD) => {
+          diariesToSave.some((newD) => {
             const dCrime = (d.crNoAndSecOfLaw || '').split(',')[0].trim().toLowerCase();
             const newCrime = (newD.crNoAndSecOfLaw || '').split(',')[0].trim().toLowerCase();
             const dStation = (d.policeStation || '').trim().toLowerCase();
@@ -935,16 +996,16 @@ export default function App() {
       if (existingDb) {
         // Merge diaries: replace matching ones (same Cr No & Date), append others
         const mergedDiaries = [...existingDb.diaries];
-        diaries.forEach((newD) => {
+        diariesToSave.forEach((newD) => {
           const idx = mergedDiaries.findIndex((d) => 
             d.id === newD.id || 
             ((d.crNoAndSecOfLaw || '').trim().toLowerCase() === (newD.crNoAndSecOfLaw || '').trim().toLowerCase() &&
              (d.dateOfCd || '').trim().toLowerCase() === (newD.dateOfCd || '').trim().toLowerCase())
           );
           if (idx >= 0) {
-            mergedDiaries[idx] = newD; // Update/Overwrite
+            mergedDiaries[idx] = { ...newD, dbId: existingDb.id };
           } else {
-            mergedDiaries.push(newD);  // Append
+            mergedDiaries.push({ ...newD, dbId: existingDb.id });
           }
         });
         
@@ -952,15 +1013,25 @@ export default function App() {
         setSavedDatabases((prev) => prev.map(db => db.id === existingDb.id ? saved : db));
         setSaveDbStatus({ type: 'success', message: `Updated matching Case Head: "${existingDb.name}"` });
         setSelectedSavedDbId(existingDb.id);
-        setLoadedDbId(existingDb.id);
-        setLoadedDbName(existingDb.name);
+        
+        // Update tagged diaries in the workspace
+        setDiaries(prev => prev.map(d => {
+          const match = mergedDiaries.find(md => md.id === d.id);
+          return match ? { ...d, dbId: existingDb.id } : d;
+        }));
       } else {
-        saved = await saveSavedDatabase(name, diaries, user.uid);
+        const generatedDbId = `db-${Date.now()}`;
+        const taggedDiaries = diariesToSave.map(d => ({ ...d, dbId: generatedDbId }));
+        saved = await saveSavedDatabase(name, taggedDiaries, user.uid, generatedDbId);
         setSavedDatabases((prev) => [saved, ...prev]);
         setSaveDbStatus({ type: 'success', message: `Successfully saved as "${name}"!` });
         setSelectedSavedDbId(saved.id);
-        setLoadedDbId(saved.id);
-        setLoadedDbName(saved.name);
+
+        // Update tagged diaries in the workspace
+        setDiaries(prev => prev.map(d => {
+          const match = taggedDiaries.find(td => td.id === d.id);
+          return match ? { ...d, dbId: generatedDbId } : d;
+        }));
       }
       setShowSaveDbPrompt(false);
       setTimeout(() => {
@@ -977,8 +1048,21 @@ export default function App() {
     const dbName = gatewayDbName.trim() || `Database - Extracted ${Date.now()}`;
     setSaveDbStatus({ type: 'loading', message: 'Saving extracted database to Cloud...' });
     try {
-      const saved = await saveSavedDatabase(dbName, lastExtractedDiaries, user.uid);
-      setSavedDatabases((prev) => [saved, ...prev]);
+      const generatedDbId = gatewayDbId || `db-${Date.now()}`;
+      const taggedDiaries = lastExtractedDiaries.map(d => ({ ...d, dbId: generatedDbId }));
+      const saved = await saveSavedDatabase(dbName, taggedDiaries, user.uid, generatedDbId);
+      setSavedDatabases((prev) => {
+        const filtered = prev.filter(db => db.id !== saved.id);
+        return [saved, ...filtered];
+      });
+      setGatewayDbId(saved.id);
+
+      // Merge newly extracted tagged diaries into workspace
+      setDiaries(prev => {
+        const otherDiaries = prev.filter(d => !taggedDiaries.some(td => td.id === d.id));
+        return [...otherDiaries, ...taggedDiaries];
+      });
+
       setSaveDbStatus({ type: 'success', message: `Successfully saved as "${dbName}"!` });
       setTimeout(() => {
         setSaveDbStatus({ type: null, message: null });
@@ -1049,8 +1133,21 @@ export default function App() {
         } else {
           // No conflict, save directly
           setSaveDbStatus({ type: 'loading', message: `Importing database "${dbName}"...` });
-          const saved = await saveSavedDatabase(dbName, importedDiaries, user.uid);
+          const generatedDbId = `db-${Date.now()}`;
+          const taggedDiaries = importedDiaries.map((d: CaseDiary) => ({ ...d, dbId: generatedDbId }));
+          const saved = await saveSavedDatabase(dbName, taggedDiaries, user.uid, generatedDbId);
           setSavedDatabases((prev) => [saved, ...prev]);
+          setDiaries(prev => {
+            const combined = [...prev, ...taggedDiaries];
+            const seen = new Set<string>();
+            return combined.filter(d => {
+              const key = `${(d.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(d.policeStation || '').trim().toLowerCase()}_${(d.dateOfCd || '').trim().toLowerCase()}`;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+          });
+          setSelectedDiaryId(taggedDiaries[0]?.id || null);
           setSaveDbStatus({ type: 'success', message: `Successfully imported "${dbName}"!` });
           setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3000);
         }
@@ -1083,14 +1180,29 @@ export default function App() {
         );
         if (idx >= 0) {
           // Merge keeping any custom modifications/fields if needed, or simply overwrite with imported values
-          mergedDiaries[idx] = { ...mergedDiaries[idx], ...newD };
+          mergedDiaries[idx] = { ...mergedDiaries[idx], ...newD, dbId: existingDb.id };
         } else {
-          mergedDiaries.push(newD);
+          mergedDiaries.push({ ...newD, dbId: existingDb.id });
         }
       });
 
-      const saved = await saveSavedDatabase(existingDb.name, mergedDiaries, user.uid, existingDb.id);
+      const taggedDiaries = mergedDiaries.map(d => ({ ...d, dbId: existingDb.id }));
+      const saved = await saveSavedDatabase(existingDb.name, taggedDiaries, user.uid, existingDb.id);
       setSavedDatabases((prev) => prev.map(db => db.id === existingDb.id ? saved : db));
+      
+      setDiaries(prev => {
+        const otherDiaries = prev.filter(d => d.dbId !== existingDb.id);
+        const combined = [...otherDiaries, ...taggedDiaries];
+        const seen = new Set<string>();
+        return combined.filter(d => {
+          const key = `${(d.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(d.policeStation || '').trim().toLowerCase()}_${(d.dateOfCd || '').trim().toLowerCase()}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      });
+      setSelectedDiaryId(taggedDiaries[0]?.id || null);
+
       setSaveDbStatus({ type: 'success', message: `Successfully merged imported records into "${dbName}"!` });
       setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3500);
     } catch (err: any) {
@@ -1113,8 +1225,23 @@ export default function App() {
 
     setSaveDbStatus({ type: 'loading', message: `Saving imported database as "${uniqueName}"...` });
     try {
-      const saved = await saveSavedDatabase(uniqueName, importedDiaries, user.uid);
+      const generatedDbId = `db-${Date.now()}`;
+      const taggedDiaries = importedDiaries.map((d: CaseDiary) => ({ ...d, dbId: generatedDbId }));
+      const saved = await saveSavedDatabase(uniqueName, taggedDiaries, user.uid, generatedDbId);
       setSavedDatabases((prev) => [saved, ...prev]);
+      
+      setDiaries(prev => {
+        const combined = [...prev, ...taggedDiaries];
+        const seen = new Set<string>();
+        return combined.filter(d => {
+          const key = `${(d.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(d.policeStation || '').trim().toLowerCase()}_${(d.dateOfCd || '').trim().toLowerCase()}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      });
+      setSelectedDiaryId(taggedDiaries[0]?.id || null);
+
       setSaveDbStatus({ type: 'success', message: `Successfully saved as "${uniqueName}"!` });
       setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3500);
     } catch (err: any) {
@@ -1126,7 +1253,8 @@ export default function App() {
   const handleViewGatewayInWorkspace = () => {
     if (lastExtractedDiaries.length > 0) {
       setDiaries((prev) => {
-        const combined = [...prev, ...lastExtractedDiaries];
+        const diariesWithDbId = lastExtractedDiaries.map(d => ({ ...d, dbId: gatewayDbId || undefined }));
+        const combined = [...prev, ...diariesWithDbId];
         const seenKeys = new Set<string>();
         const filtered: CaseDiary[] = [];
         combined.forEach((diary) => {
@@ -1155,11 +1283,16 @@ export default function App() {
     if (!loadedDb || !loadedDb.diaries) return;
     const selectedDiaries = loadedDb.diaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
     if (selectedDiaries.length > 0) {
-      setDiaries(selectedDiaries);
+      setDiaries(prev => {
+        const combined = [...prev];
+        selectedDiaries.forEach(diary => {
+          if (!combined.some(d => d.id === diary.id)) {
+            combined.push({ ...diary, dbId: dbItem.id });
+          }
+        });
+        return combined;
+      });
       setSelectedDiaryId(selectedDiaries[0].id);
-      setLoadedDbId(dbItem.id);
-      setLoadedDbName(dbItem.name);
-      setIsSaved(true);
       setSelectedDatabaseCaseIds([]);
       setActiveTab('editor');
     }
@@ -1168,11 +1301,23 @@ export default function App() {
   const handleViewDatabaseDraft = async (dbItem: SavedDatabase) => {
     const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
     if (loadedDb && loadedDb.diaries && loadedDb.diaries.length > 0) {
-      setDiaries(loadedDb.diaries);
-      setSelectedDiaryId(loadedDb.diaries[0].id);
-      setLoadedDbId(dbItem.id);
-      setLoadedDbName(dbItem.name);
-      setIsSaved(true);
+      const firstDiary = diaries.find(d => d.dbId === dbItem.id);
+      if (firstDiary) {
+        setSelectedDiaryId(firstDiary.id);
+      } else {
+        const mapped = loadedDb.diaries.map(d => ({ ...d, dbId: dbItem.id }));
+        setDiaries(prev => {
+          const combined = [...prev, ...mapped];
+          const seen = new Set<string>();
+          return combined.filter(d => {
+            const key = `${(d.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(d.policeStation || '').trim().toLowerCase()}_${(d.dateOfCd || '').trim().toLowerCase()}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        });
+        setSelectedDiaryId(loadedDb.diaries[0].id);
+      }
       setActiveTab('editor');
     } else {
       alert("This saved database contains no diary entries.");
@@ -1183,7 +1328,8 @@ export default function App() {
     if (!user || !loadedDbId) return;
     setSaveDbStatus({ type: 'loading', message: 'Updating your database library...' });
     try {
-      const saved = await saveSavedDatabase(loadedDbName || "Database", diaries, user.uid, loadedDbId);
+      const dbDiaries = diaries.filter(d => d.dbId === loadedDbId);
+      const saved = await saveSavedDatabase(loadedDbName || "Database", dbDiaries, user.uid, loadedDbId);
       setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
       setSaveDbStatus({ type: 'success', message: 'Database updated successfully!' });
       setIsSaved(true);
@@ -1203,15 +1349,13 @@ export default function App() {
       try {
         await deleteSavedDatabase(id, user.uid);
         setSavedDatabases((prev) => prev.filter((dbItem) => dbItem.id !== id));
-        if (selectedSavedDbId === id) {
-          setSelectedSavedDbId(null);
-        }
-        if (loadedDbId === id) {
-          setLoadedDbId(null);
-          setLoadedDbName(null);
-          setDiaries([]);
-          setSelectedDiaryId(null);
-        }
+        setDiaries((prev) => {
+          const filtered = prev.filter((d) => d.dbId !== id);
+          if (selectedDiaryId && prev.find((d) => d.id === selectedDiaryId)?.dbId === id) {
+            setSelectedDiaryId(filtered[0]?.id || null);
+          }
+          return filtered;
+        });
       } catch (err) {
         console.error("Delete database error:", err);
         alert("Failed to delete the database.");
@@ -1235,20 +1379,31 @@ export default function App() {
         if (updatedDiaries.length === 0) {
           await deleteSavedDatabase(dbId, user.uid);
           setSavedDatabases(prev => prev.filter(db => db.id !== dbId));
-          if (loadedDbId === dbId) {
-            setLoadedDbId(null);
-            setLoadedDbName(null);
-            setDiaries([]);
-            setSelectedDiaryId(null);
-          }
+          setDiaries(prev => {
+            const filtered = prev.filter(d => d.dbId !== dbId);
+            if (selectedDiaryId && prev.find(d => d.id === selectedDiaryId)?.dbId === dbId) {
+              setSelectedDiaryId(filtered[0]?.id || null);
+            }
+            return filtered;
+          });
           alert("The database became empty and has been deleted completely.");
         } else {
           const updatedDb = await saveSavedDatabase(targetDb.name, updatedDiaries, user.uid, dbId);
           setSavedDatabases(prev => prev.map(db => db.id === dbId ? updatedDb : db));
-          if (loadedDbId === dbId) {
-            setDiaries(updatedDiaries);
-            setSelectedDiaryId(updatedDiaries[0]?.id || null);
-          }
+          setDiaries(prev => {
+            const updated = prev.map(d => {
+              if (d.dbId === dbId) {
+                if (d.id === diaryId) return null;
+                const match = updatedDiaries.find(ud => ud.id === d.id);
+                return match ? { ...match, dbId } : d;
+              }
+              return d;
+            }).filter(Boolean) as CaseDiary[];
+            if (selectedDiaryId === diaryId) {
+              setSelectedDiaryId(updated.find(u => u.dbId === dbId)?.id || updated[0]?.id || null);
+            }
+            return updated;
+          });
         }
       } catch (err) {
         console.error("Error deleting individual diary from DB:", err);
@@ -1264,11 +1419,14 @@ export default function App() {
     }
     const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
     if (loadedDb && loadedDb.diaries) {
-      setDiaries(loadedDb.diaries);
+      const exists = diaries.some(d => d.id === diaryId);
+      if (!exists) {
+        const targetDiary = loadedDb.diaries.find(d => d.id === diaryId);
+        if (targetDiary) {
+          setDiaries(prev => [...prev, { ...targetDiary, dbId: dbItem.id }]);
+        }
+      }
       setSelectedDiaryId(diaryId);
-      setLoadedDbId(dbItem.id);
-      setLoadedDbName(dbItem.name);
-      setIsSaved(true);
       setActiveTab('editor');
     }
   };
@@ -1874,7 +2032,8 @@ export default function App() {
     // If inside a loaded database session, sync immediately to keep all tiers in absolute sync
     if (user && loadedDbId) {
       try {
-        const saved = await saveSavedDatabase(loadedDbName || "Database", updatedDiaries, user.uid, loadedDbId);
+        const dbDiaries = updatedDiaries.filter(d => d.dbId === loadedDbId);
+        const saved = await saveSavedDatabase(loadedDbName || "Database", dbDiaries, user.uid, loadedDbId);
         setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
       } catch (err) {
         console.error("Instant save failed during workspace manual save:", err);
