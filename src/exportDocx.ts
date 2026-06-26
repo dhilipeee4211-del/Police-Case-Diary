@@ -47,7 +47,37 @@ const boldText = (text: string, size = 10) =>
   new TextRun({ text, bold: true, size: size * 2, font: "Arial" });
 
 const normalText = (text: string, size = 10) =>
-  new TextRun({ text: text || "NIL", size: size * 2, font: "Arial" });
+  new TextRun({ text: (text === undefined || text === null) ? "NIL" : text, size: size * 2, font: "Arial" });
+
+function cleanPoliceStation(ps: string): string {
+  if (!ps) return "";
+  let cleaned = ps.trim();
+  cleaned = cleaned.replace(/\bPOLICE\s+STATION\b/gi, "");
+  cleaned = cleaned.replace(/\bPS\b/gi, "");
+  cleaned = cleaned.replace(/\bP\.S\.\b/gi, "");
+  cleaned = cleaned.replace(/\bSTATION\b/gi, "");
+  return cleaned.trim().toUpperCase();
+}
+
+function cleanPropertyDetail(val: string, stage: string): string {
+  if (!val) return "";
+  const trimmed = val.trim();
+  const upper = trimmed.toUpperCase();
+  const stageUpper = (stage || "").trim().toUpperCase();
+  
+  if (upper === "NIL" || 
+      upper === "NIL." || 
+      upper === "NONE" || 
+      upper === "NONE." || 
+      upper === "NILL" || 
+      upper === stageUpper || 
+      upper === "PENDING TRIAL" || 
+      upper === "CASE DISPOSED") {
+    return "";
+  }
+  return trimmed;
+}
+
 
 /**
  * Splits a "CR. NO. & SEC. OF LAW" value like
@@ -335,7 +365,7 @@ function createDiaryChildren(diary: CaseDiary): any[] {
 
     // Table 1: Police Station & District
     create4ColTable([
-      gridPairRow("POLICE STATION  ", diary.policeStation, "DISTRICT ", diary.district, [1900, 3200, 1300, 2600])
+      gridPairRow("POLICE STATION  ", cleanPoliceStation(diary.policeStation), "DISTRICT ", diary.district, [1900, 3200, 1300, 2600])
     ], [1900, 3200, 1300, 2600]),
 
     new Paragraph({ spacing: { before: 40, after: 40 } }),
@@ -356,7 +386,7 @@ function createDiaryChildren(diary: CaseDiary): any[] {
     // Section 4: Property Lost
     createSectionHeader("IV.PROPERTY LOST DETAILS"),
     new Paragraph({
-      children: [normalText(diary.propertyLostDetails || "NIL")],
+      children: [normalText(cleanPropertyDetail(diary.propertyLostDetails, diary.stageOfTheCase))],
       spacing: { before: 40, after: 80 },
       indent: { left: 200 },
     }),
@@ -364,7 +394,7 @@ function createDiaryChildren(diary: CaseDiary): any[] {
     // Section 5: Recovered Property
     createSectionHeader("V.RECOVERED PROPERTY DETAILS"),
     new Paragraph({
-      children: [normalText(diary.recoveredPropertyDetails || "NIL")],
+      children: [normalText(cleanPropertyDetail(diary.recoveredPropertyDetails, diary.stageOfTheCase))],
       spacing: { before: 40, after: 80 },
       indent: { left: 200 },
     }),

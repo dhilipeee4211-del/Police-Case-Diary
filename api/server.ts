@@ -138,7 +138,8 @@ Ensure that you:
 1. Parse every page thoroughly. Do not skip any case diaries.
 2. Group the remarks and page remarks accurately with their corresponding case diary entry (by matching dates, page headers, or CR Nos).
 3. Do not force English translations on the Tamil remarks; keep the original Tamil text exactly as written.
-4. Keep the JSON output perfectly formatted without any trailing commas or syntax errors.
+4. DO NOT copy the "stage of the case" (like PENDING TRIAL, CASE DISPOSED, etc.) into "propertyLostDetails" or "recoveredPropertyDetails". If there are no property lost or recovered details, set these fields to "Nil" or leave them blank.
+5. Keep the JSON output perfectly formatted without any trailing commas or syntax errors.
 `;
 
     const modelsToTry = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
@@ -390,7 +391,8 @@ Ensure that you:
 1. Parse the text thoroughly. Do not skip any case diaries.
 2. Group the remarks and page remarks accurately with their corresponding case diary entry (by matching dates, page headers, or CR Nos).
 3. Do not force English translations on the Tamil remarks; keep the original Tamil text exactly as written.
-4. Keep the JSON output perfectly formatted without any trailing commas or syntax errors.
+4. DO NOT copy the "stage of the case" (like PENDING TRIAL, CASE DISPOSED, etc.) into "propertyLostDetails" or "recoveredPropertyDetails". If there are no property lost or recovered details, set these fields to "Nil" or leave them blank.
+5. Keep the JSON output perfectly formatted without any trailing commas or syntax errors.
 `;
 
     const modelsToTry = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
