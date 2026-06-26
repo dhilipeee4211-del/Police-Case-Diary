@@ -107,7 +107,7 @@ export async function getSavedDatabases(userId: string, email?: string): Promise
 }
 
 // Delete a database session (deletes from both server and local storage)
-export async function deleteSavedDatabase(id: string, userId: string): Promise<void> {
+export async function deleteSavedDatabase(id: string, userId: string, email?: string): Promise<void> {
   // 1. Delete from local storage
   const localDbs = getLocalDatabases(userId);
   const updatedLocal = localDbs.filter((db) => db.id !== id);
@@ -118,7 +118,7 @@ export async function deleteSavedDatabase(id: string, userId: string): Promise<v
     const serverResponse = await fetch('/api/db/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, userId }),
+      body: JSON.stringify({ id, userId, email }),
     });
 
     if (!serverResponse.ok) {

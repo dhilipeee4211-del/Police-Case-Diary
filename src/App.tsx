@@ -1394,7 +1394,7 @@ export default function App() {
     const confirmMsg = "Are you sure you want to permanently delete this database from BOTH local server disk storage and Supabase Cloud? This action is permanent and cannot be undone.";
     if (window.confirm(confirmMsg)) {
       try {
-        await deleteSavedDatabase(id, user.uid);
+        await deleteSavedDatabase(id, user.uid, user.email || undefined);
         setSavedDatabases((prev) => prev.filter((dbItem) => dbItem.id !== id));
         setDiaries((prev) => {
           const filtered = prev.filter((d) => d.dbId !== id);
@@ -1424,7 +1424,7 @@ export default function App() {
         const updatedDiaries = (targetDb.diaries || []).filter(d => d.id !== diaryId);
         
         if (updatedDiaries.length === 0) {
-          await deleteSavedDatabase(dbId, user.uid);
+          await deleteSavedDatabase(dbId, user.uid, user.email || undefined);
           setSavedDatabases(prev => prev.filter(db => db.id !== dbId));
           setDiaries(prev => {
             const filtered = prev.filter(d => d.dbId !== dbId);

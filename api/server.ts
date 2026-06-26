@@ -1058,7 +1058,7 @@ app.post('/api/db/save', async (req, res) => {
 // Endpoint: Delete a database entry (Dual local disk & Supabase)
 app.post('/api/db/delete', async (req, res) => {
   try {
-    const { id, userId } = req.body;
+    const { id, userId, email } = req.body;
     if (!id || !userId) {
       return res.status(400).json({ error: 'Missing id or userId' });
     }
@@ -1069,17 +1069,39 @@ app.post('/api/db/delete', async (req, res) => {
     writeServerDatabases(updatedDbs);
     console.log(`Successfully deleted database ${id} from server local disk.`);
 
+    // Clean up database access permissions for the deleted DB
+    try {
+      const accessMap = readAccessMap();
+      let accessModified = false;
+      Object.keys(accessMap).forEach((userKey) => {
+        if (accessMap[userKey] && accessMap[userKey].includes(id)) {
+          accessMap[userKey] = accessMap[userKey].filter((dbId: string) => dbId !== id);
+          accessModified = true;
+        }
+      });
+      if (accessModified) {
+        writeAccessMap(accessMap);
+        console.log(`Successfully cleaned up database access mapping for deleted database ${id}`);
+      }
+    } catch (accessErr) {
+      console.error('Error cleaning up deleted database from access map:', accessErr);
+    }
+
     if (!supabaseServerClient) {
       return res.json({ success: true, deleted: true, supabaseSynced: false });
     }
 
+    const userEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    const isAdmin = userEmail === 'dhilipeee4211@gmail.com';
+
     try {
+      let query = supabaseServerClient.from('case_databases').delete().eq('id', id);
+      if (!isAdmin) {
+        query = query.eq('user_id', userId);
+      }
+
       const { error } = await withTimeout(
-        supabaseServerClient
-          .from('case_databases')
-          .delete()
-          .eq('id', id)
-          .eq('user_id', userId),
+        query,
         3500,
         'Supabase delete query timed out'
       );
