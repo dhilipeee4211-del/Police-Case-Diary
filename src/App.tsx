@@ -8,6 +8,7 @@ import {
   FileText, 
   UploadCloud, 
   CheckCircle, 
+  ArrowLeft,
   ArrowRight, 
   Lock, 
   RefreshCw, 
@@ -3322,26 +3323,15 @@ export default function App() {
                       <div className={`flex-1 w-full flex-col gap-6 ${showMobileEditor ? 'flex' : 'hidden lg:flex'}`}>
                         {activeDiary ? (
                           <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
-                            {/* Database active session indicator banner */}
-                            {loadedDbId && (
-                              <div className="mb-4 border rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
-                                <div className="flex items-center gap-2">
-                                  <Database className="w-4 h-4 shrink-0" style={{ color: 'var(--th-primary)' }} />
-                                  <div>
-                                    <p className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Active Database Session: <span className="underline">{loadedDbName}</span></p>
-                                    <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Any changes you make here can be synced directly back to your database library.</p>
-                                  </div>
-                                </div>
-                                <button
-                                  onClick={handleUpdateDatabase}
-                                  className="text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
-                                  style={{ background: 'var(--th-primary)' }}
-                                >
-                                  <Save className="w-3.5 h-3.5" />
-                                  Sync Updates to DB
-                                </button>
-                              </div>
-                            )}
+                            {/* Mobile: Back to Case List */}
+                            <button
+                              className="lg:hidden mb-3 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+                              style={{ color: 'var(--th-primary)' }}
+                              onClick={() => setShowMobileEditor(false)}
+                            >
+                              <ArrowLeft className="w-4 h-4" />
+                              ← Back to Case List
+                            </button>
 
                             {/* Database Save Status Feedback Notification */}
                             {saveDbStatus.message && (
