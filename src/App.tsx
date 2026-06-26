@@ -688,7 +688,7 @@ export default function App() {
         const parts = extractedText.split(/--- PAGE \d+(?: \(SCANNED OCR\))? ---/);
         const pages = parts.slice(1).map(p => p.trim());
         
-        const chunkSize = 5;
+        const chunkSize = 2;
         const chunks: string[] = [];
         for (let i = 0; i < pages.length; i += chunkSize) {
           const chunkPages = pages.slice(i, i + chunkSize);
