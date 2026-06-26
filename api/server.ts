@@ -579,7 +579,7 @@ const DB_FILE = path.join(DATA_DIR, 'databases.json');
 const ACCESS_FILE = path.join(DATA_DIR, 'database_access.json');
 
 // Helper to read database access mappings from disk
-function readAccessMap(): Record<string, string[]> {
+function readAccessMapLocal(): Record<string, string[]> {
   try {
     ensureDataDirExists();
     if (!fs.existsSync(ACCESS_FILE)) {
@@ -594,12 +594,90 @@ function readAccessMap(): Record<string, string[]> {
 }
 
 // Helper to write database access mappings to disk
-function writeAccessMap(accessMap: Record<string, string[]>): void {
+function writeAccessMapLocal(accessMap: Record<string, string[]>): void {
   try {
     ensureDataDirExists();
     fs.writeFileSync(ACCESS_FILE, JSON.stringify(accessMap, null, 2), 'utf8');
   } catch (err) {
     console.error('Error writing database_access.json:', err);
+  }
+}
+
+// Helper to read database access mappings from disk or Supabase
+async function readAccessMap(): Promise<Record<string, string[]>> {
+  // 1. Try to read from Supabase if configured
+  if (supabaseServerClient) {
+    try {
+      const { data, error } = await withTimeout(
+        supabaseServerClient.from('database_access').select('*'),
+        3000,
+        'Supabase access list query timed out'
+      );
+      if (!error && data) {
+        const map: Record<string, string[]> = {};
+        data.forEach((row: any) => {
+          const email = row.email.toLowerCase().trim();
+          if (!map[email]) {
+            map[email] = [];
+          }
+          if (!map[email].includes(row.db_id)) {
+            map[email].push(row.db_id);
+          }
+        });
+        // Cache to local file just in case
+        writeAccessMapLocal(map);
+        return map;
+      } else {
+        console.warn('Supabase access map read error, falling back to disk:', error);
+      }
+    } catch (err) {
+      console.warn('Supabase access map read exception, falling back to disk:', err);
+    }
+  }
+
+  // 2. Fall back to local file
+  return readAccessMapLocal();
+}
+
+// Helper to write database access mappings (Dual local disk & Supabase)
+async function writeAccessMap(accessMap: Record<string, string[]>): Promise<void> {
+  // 1. ALWAYS write to local disk first
+  writeAccessMapLocal(accessMap);
+
+  // 2. Sync to Supabase if configured
+  if (supabaseServerClient) {
+    try {
+      // Flatten map into rows: [ { email, db_id } ]
+      const rows: { email: string; db_id: string }[] = [];
+      Object.entries(accessMap).forEach(([email, dbIds]) => {
+        const lowerEmail = email.toLowerCase().trim();
+        dbIds.forEach((dbId) => {
+          rows.push({ email: lowerEmail, db_id: dbId });
+        });
+      });
+
+      // Clear all existing records and rewrite to guarantee sync
+      await withTimeout(
+        supabaseServerClient.from('database_access').delete().neq('email', 'placeholder_nonexistent_email@gmail.com'),
+        3000,
+        'Supabase access clear timed out'
+      );
+
+      if (rows.length > 0) {
+        const { error } = await withTimeout(
+          supabaseServerClient.from('database_access').insert(rows),
+          3000,
+          'Supabase access sync timed out'
+        );
+        if (error) {
+          console.warn('Supabase access sync failed:', error);
+        } else {
+          console.log('Successfully synced database access map to Supabase.');
+        }
+      }
+    } catch (err) {
+      console.error('Error syncing database access map to Supabase:', err);
+    }
   }
 }
 
@@ -697,24 +775,28 @@ CREATE TABLE IF NOT EXISTS case_databases (
   diaries JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 
--- Enable Row Level Security (RLS)
+-- Create the database_access table to store shared database permissions permanently
+CREATE TABLE IF NOT EXISTS database_access (
+  email TEXT NOT NULL,
+  db_id TEXT NOT NULL,
+  PRIMARY KEY (email, db_id)
+);
+
+-- Enable Row Level Security (RLS) on both tables
 ALTER TABLE case_databases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE database_access ENABLE ROW LEVEL SECURITY;
 
--- Create policy to allow all users to select their own records
-CREATE POLICY "Allow select for user" ON case_databases
-  FOR SELECT USING (true);
+-- Create policies for case_databases
+CREATE POLICY "Allow select for user" ON case_databases FOR SELECT USING (true);
+CREATE POLICY "Allow insert for user" ON case_databases FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow update for user" ON case_databases FOR UPDATE USING (true);
+CREATE POLICY "Allow delete for user" ON case_databases FOR DELETE USING (true);
 
--- Create policy to allow all users to insert their own records
-CREATE POLICY "Allow insert for user" ON case_databases
-  FOR INSERT WITH CHECK (true);
-
--- Create policy to allow all users to update their own records
-CREATE POLICY "Allow update for user" ON case_databases
-  FOR UPDATE USING (true);
-
--- Create policy to allow all users to delete their own records
-CREATE POLICY "Allow delete for user" ON case_databases
-  FOR DELETE USING (true);
+-- Create policies for database_access
+CREATE POLICY "Allow select for all" ON database_access FOR SELECT USING (true);
+CREATE POLICY "Allow insert for all" ON database_access FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow update for all" ON database_access FOR UPDATE USING (true);
+CREATE POLICY "Allow delete for all" ON database_access FOR DELETE USING (true);
 `;
 
     let connectionTest = false;
@@ -773,7 +855,7 @@ app.get('/api/db/list', async (req, res) => {
 
     const userEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
     const isAdmin = userEmail === 'dhilipeee4211@gmail.com';
-    const accessMap = readAccessMap();
+    const accessMap = await readAccessMap();
     const allowedDbIds = accessMap[userEmail] || [];
 
     // Filter local disk databases based on ownership/permissions
@@ -883,7 +965,7 @@ app.get('/api/db/get', async (req, res) => {
 
     const userEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
     const isAdmin = userEmail === 'dhilipeee4211@gmail.com';
-    const accessMap = readAccessMap();
+    const accessMap = await readAccessMap();
     const allowedDbIds = accessMap[userEmail] || [];
 
     // Check if the user is allowed to access this database
@@ -953,17 +1035,17 @@ app.get('/api/db/get', async (req, res) => {
 });
 
 // Endpoint: GET database access map (Admin only)
-app.get('/api/db/access', (req, res) => {
+app.get('/api/db/access', async (req, res) => {
   const { email } = req.query;
   if (!email || email !== 'dhilipeee4211@gmail.com') {
     return res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
   }
-  const accessMap = readAccessMap();
+  const accessMap = await readAccessMap();
   return res.json({ success: true, accessMap });
 });
 
 // Endpoint: POST database access update (Admin only)
-app.post('/api/db/access', (req, res) => {
+app.post('/api/db/access', async (req, res) => {
   const { requesterEmail, targetEmail, dbId, action } = req.body;
   
   if (!requesterEmail || requesterEmail !== 'dhilipeee4211@gmail.com') {
@@ -974,7 +1056,7 @@ app.post('/api/db/access', (req, res) => {
     return res.status(400).json({ error: 'Missing parameters. Need targetEmail, dbId, and action.' });
   }
   
-  const accessMap = readAccessMap();
+  const accessMap = await readAccessMap();
   const lowerTargetEmail = targetEmail.toLowerCase().trim();
   
   if (!accessMap[lowerTargetEmail]) {
@@ -991,7 +1073,7 @@ app.post('/api/db/access', (req, res) => {
     return res.status(400).json({ error: 'Invalid action. Use "grant" or "revoke".' });
   }
   
-  writeAccessMap(accessMap);
+  await writeAccessMap(accessMap);
   return res.json({ success: true, accessMap });
 });
 
@@ -1071,7 +1153,7 @@ app.post('/api/db/delete', async (req, res) => {
 
     // Clean up database access permissions for the deleted DB
     try {
-      const accessMap = readAccessMap();
+      const accessMap = await readAccessMap();
       let accessModified = false;
       Object.keys(accessMap).forEach((userKey) => {
         if (accessMap[userKey] && accessMap[userKey].includes(id)) {
@@ -1080,7 +1162,7 @@ app.post('/api/db/delete', async (req, res) => {
         }
       });
       if (accessModified) {
-        writeAccessMap(accessMap);
+        await writeAccessMap(accessMap);
         console.log(`Successfully cleaned up database access mapping for deleted database ${id}`);
       }
     } catch (accessErr) {
