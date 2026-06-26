@@ -2260,7 +2260,7 @@ export default function App() {
   const roleInfo = getUserRole(user?.email);
 
   return (
-    <div className="min-h-screen flex flex-col antialiased relative pb-20 lg:pb-0" style={{ background: 'var(--th-bg)', color: 'var(--th-text)' }}>
+    <div className="min-h-screen min-h-dvh flex flex-col antialiased relative pb-20 lg:pb-0" style={{ background: 'var(--th-bg)', color: 'var(--th-text)' }}>
       {/* Ambient shifting background gradient blobs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none select-none z-0">
         <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] amb-blob-1 rounded-full blur-[120px] animate-float-slow" />
@@ -3232,7 +3232,7 @@ export default function App() {
                         </div>
 
                         {/* Scrollable list of loaded cases */}
-                        <div className="flex-1 overflow-y-auto max-h-[300px] lg:max-h-[none] flex flex-col gap-2 pr-1">
+                        <div className="flex-1 overflow-y-auto flex flex-col gap-2 pr-1" style={{ maxHeight: 'min(300px, calc(100dvh - 280px))' }}>
                           {diaries
                             .filter(diary => {
                               const q = searchQuery.toLowerCase().trim();
@@ -3322,7 +3322,7 @@ export default function App() {
                       {/* Right Panel: Editor Form */}
                       <div className={`flex-1 w-full flex-col gap-6 ${showMobileEditor ? 'flex' : 'hidden lg:flex'}`}>
                         {activeDiary ? (
-                          <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                          <div className="backdrop-blur-md border rounded-3xl p-4 sm:p-6 shadow-sm flex flex-col min-h-0 lg:min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
                             {/* Mobile: Back to Case List */}
                             <button
                               className="lg:hidden mb-3 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
@@ -3426,7 +3426,7 @@ export default function App() {
                             </div>
 
                             {/* Interactive Case Diary Document Form */}
-                            <div className="space-y-6 lg:mt-6 max-h-[680px] overflow-y-auto pr-1">
+                            <div className="space-y-6 lg:mt-6 overflow-y-auto pr-1" style={{ maxHeight: 'calc(100dvh - 180px)' }}>
                               {/* Section 1: Headers */}
                               <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                                 <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>I. Administration & Registry</h4>
@@ -4293,7 +4293,7 @@ export default function App() {
 
       {/* Mobile Bottom Navigation Bar */}
       {user && (
-        <div className="lg:hidden fixed bottom-0 left-0 right-0 backdrop-blur-xl border-t px-4 py-2 z-50 flex items-center justify-around shadow-lg" style={{ background: 'var(--th-header-bg)', borderColor: 'var(--th-header-border)' }}>
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 backdrop-blur-xl border-t px-4 z-50 flex items-center justify-around shadow-lg" style={{ background: 'var(--th-header-bg)', borderColor: 'var(--th-header-border)', paddingBottom: 'max(env(safe-area-inset-bottom), 8px)', paddingTop: '8px' }}>
           <button
             onClick={() => setActiveTab('gateway')}
             className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer`}
