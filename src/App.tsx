@@ -8,6 +8,7 @@ import {
   FileText, 
   UploadCloud, 
   CheckCircle, 
+  ArrowLeft,
   ArrowRight, 
   Lock, 
   RefreshCw, 
@@ -346,12 +347,13 @@ export default function App() {
   const [adminTargetEmail, setAdminTargetEmail] = useState<string>('');
   const [adminSelectedDbId, setAdminSelectedDbId] = useState<string>('');
   const [isUpdatingAccess, setIsUpdatingAccess] = useState<boolean>(false);
+  const [showMobileEditor, setShowMobileEditor] = useState<boolean>(false);
 
   // Conversion States
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
-  const [extractionMode, setExtractionMode] = useState<'direct' | 'free'>('free');
+  const [extractionMode, setExtractionMode] = useState<'direct' | 'free'>('direct');
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [extractionProgress, setExtractionProgress] = useState<number>(0);
   const [extractionStep, setExtractionStep] = useState<string>('');
@@ -1475,6 +1477,7 @@ export default function App() {
       }
       setSelectedDiaryId(diaryId);
       setActiveTab('editor');
+      setShowMobileEditor(true);
     }
   };
 
@@ -1756,6 +1759,35 @@ export default function App() {
           const isRateLimited = response.status === 429;
           const isServerError = response.status >= 500;
           
+          if (isRateLimited && retriesLeft === 0) {
+            // All retries exhausted — save accumulated data FIRST, then raise quota error
+            if (accumulatedDiaries.length > 0 && user) {
+              try {
+                addLocalLog(`Gemini quota hit at batch ${cIdx + 1}. Saving ${accumulatedDiaries.length} already-extracted record(s) before stopping...`, 'SYSTEM');
+                const saved = await saveSavedDatabase(dbName, accumulatedDiaries, user.uid, activeDbId || undefined);
+                activeDbId = saved.id;
+                setGatewayDbId(saved.id);
+                setSavedDatabases(prev => {
+                  const filtered = prev.filter(db => db.id !== saved.id);
+                  return [saved, ...filtered];
+                });
+                addLocalLog(`✅ ${accumulatedDiaries.length} record(s) saved to database successfully.`, 'SUCCESS');
+              } catch (saveErr: any) {
+                addLocalLog(`Failed to save partial data: ${saveErr.message}`, 'ERROR');
+              }
+            }
+            const savedCount = accumulatedDiaries.length;
+            const quotaErr = new Error(
+              `⚠️ Gemini API quota exceeded (429) at batch ${cIdx + 1} of ${chunks.length}. ${
+                savedCount > 0
+                  ? `${savedCount} record(s) from completed batches have been saved to your database.`
+                  : 'No records were extracted before the quota was hit.'
+              } Please wait and try again later, or switch to 'Unlimited Free' mode.`
+            );
+            (quotaErr as any).isQuotaError = true;
+            throw quotaErr;
+          }
+          
           if (retriesLeft > 0 && (isRateLimited || isServerError)) {
             const reason = isRateLimited ? "Rate limit (429)" : `Server status (${response.status})`;
             addLocalLog(`${reason} encountered. Retrying batch ${cIdx + 1} in ${delayMs / 1000}s... (${retriesLeft} retries left)`, 'SYSTEM');
@@ -1778,6 +1810,36 @@ export default function App() {
         }
 
         const chunkResult = await response.json();
+        
+        // If server used its Gemini-exhausted fallback, treat as quota error — save accumulated data first, then stop
+        if (chunkResult && chunkResult.fallbackUsed) {
+          if (accumulatedDiaries.length > 0 && user) {
+            try {
+              addLocalLog(`Gemini API exhausted at batch ${cIdx + 1}. Saving ${accumulatedDiaries.length} already-extracted record(s) before stopping...`, 'SYSTEM');
+              const saved = await saveSavedDatabase(dbName, accumulatedDiaries, user.uid, activeDbId || undefined);
+              activeDbId = saved.id;
+              setGatewayDbId(saved.id);
+              setSavedDatabases(prev => {
+                const filtered = prev.filter(db => db.id !== saved.id);
+                return [saved, ...filtered];
+              });
+              addLocalLog(`✅ ${accumulatedDiaries.length} record(s) saved to database successfully.`, 'SUCCESS');
+            } catch (saveErr: any) {
+              addLocalLog(`Failed to save partial data: ${saveErr.message}`, 'ERROR');
+            }
+          }
+          const savedCount = accumulatedDiaries.length;
+          const quotaErr = new Error(
+            `⚠️ Gemini API quota exceeded — all API keys exhausted at batch ${cIdx + 1} of ${chunks.length}. ${
+              savedCount > 0
+                ? `${savedCount} record(s) from completed batches have been saved to your database.`
+                : 'No records were extracted before the quota was hit.'
+            } Please wait and retry, or switch to 'Unlimited Free' mode.`
+          );
+          (quotaErr as any).isQuotaError = true;
+          throw quotaErr;
+        }
+        
         if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
           // Process and map chunkResult.data to CaseDiary format
           const rawDiaries: CaseDiary[] = chunkResult.data.map((diary: any, idx: number) => ({
@@ -1887,20 +1949,30 @@ export default function App() {
       setIsExtracting(false);
     } catch (err: any) {
       console.error('Queue processing error:', err);
+      const isQuotaError = !!(err as any).isQuotaError;
       addLocalLog(err.message || 'Unknown processing exception occurred.', 'ERROR');
       setConversionError(err.message || 'Failed to complete formatting reconstruction. Please retry.');
       setIsExtracting(false);
       
-      setCurrentExtractionQueue({
-        chunks,
-        mode,
-        filename,
-        nextIndex: currentProcessingIdx,
-        chunkSize,
-        startPageOffset,
-        gatewayDbName: dbName,
-        gatewayDbId: activeDbId
-      });
+      if (!isQuotaError) {
+        // Only allow resume from a normal error — not a quota error
+        setCurrentExtractionQueue({
+          chunks,
+          mode,
+          filename,
+          nextIndex: currentProcessingIdx,
+          chunkSize,
+          startPageOffset,
+          gatewayDbName: dbName,
+          gatewayDbId: activeDbId
+        });
+      } else {
+        // Quota error: already saved partial data before throwing — just clear queue state
+        setCurrentExtractionQueue(null);
+        await removeFromIndexedDB('gateway_extraction_queue');
+        await removeFromIndexedDB('gateway_extracted_diaries');
+        addLocalLog('Queue cleared. Any successfully extracted records before the quota limit have been saved to your database.', 'SYSTEM');
+      }
     }
   };
 
@@ -2093,6 +2165,7 @@ export default function App() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      setShowMobileEditor(false);
     } catch (err: any) {
       alert(`Could not compile Word document: ${err.message}`);
     }
@@ -2116,6 +2189,7 @@ export default function App() {
     }
     
     setTimeout(() => setIsSaved(false), 2000);
+    setShowMobileEditor(false);
   };
 
   const handleToggleSavedDraft = (diaryId: string, e?: React.MouseEvent) => {
@@ -2510,6 +2584,22 @@ export default function App() {
                     <div className="mt-4 rounded-2xl p-3 border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
                       <span className="text-[10px] font-bold uppercase tracking-wider block mb-2" style={{ color: 'var(--th-text4)' }}>Extraction Mode</span>
                       <div className="grid grid-cols-2 gap-2.5">
+                        {/* Cloud Upload — PRIMARY / DEFAULT */}
+                        <button
+                          type="button"
+                          onClick={() => setExtractionMode('direct')}
+                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border relative`}
+                          style={extractionMode === 'direct' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', borderColor: 'var(--th-border)' } : { background: 'transparent', borderColor: 'transparent', color: 'var(--th-text3)' }}
+                        >
+                          <p className="text-xs font-bold flex items-center gap-1">
+                            <Check className={`w-3.5 h-3.5`} style={{ color: extractionMode === 'direct' ? 'var(--th-primary)' : 'transparent' }} />
+                            Cloud Upload
+                          </p>
+                          <p className="text-[9px] mt-1 ml-4 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>Direct Gemini API. Recommended default.</p>
+                          <span className="absolute top-1.5 right-1.5 text-[8px] font-bold px-1 rounded" style={{ background: 'var(--th-primary)', color: 'white' }}>DEFAULT</span>
+                        </button>
+                        
+                        {/* Unlimited Free — SECONDARY */}
                         <button
                           type="button"
                           onClick={() => setExtractionMode('free')}
@@ -2520,20 +2610,7 @@ export default function App() {
                             <Check className={`w-3.5 h-3.5`} style={{ color: extractionMode === 'free' ? 'var(--th-primary)' : 'transparent' }} />
                             Unlimited Free
                           </p>
-                          <p className="text-[9px] mt-1 ml-4 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>Local Browser OCR. Perfect for huge files.</p>
-                        </button>
-                        
-                        <button
-                          type="button"
-                          onClick={() => setExtractionMode('direct')}
-                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border`}
-                          style={extractionMode === 'direct' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', borderColor: 'var(--th-border)' } : { background: 'transparent', borderColor: 'transparent', color: 'var(--th-text3)' }}
-                        >
-                          <p className="text-xs font-bold flex items-center gap-1">
-                            <Check className={`w-3.5 h-3.5`} style={{ color: extractionMode === 'direct' ? 'var(--th-primary)' : 'transparent' }} />
-                            Cloud Upload
-                          </p>
-                          <p className="text-[9px] mt-1 ml-4 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>Direct Gemini. Max 4.5MB on Vercel.</p>
+                          <p className="text-[9px] mt-1 ml-4 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>Local Browser OCR. No quota limits.</p>
                         </button>
                       </div>
                     </div>
@@ -3128,9 +3205,10 @@ export default function App() {
                   ) : (
                     /* SPLIT PANEL LAYOUT */
                     <div className="w-full flex flex-col lg:flex-row gap-6 items-start animate-fade-in">
+                      {/* Mobile: case list OR editor; Desktop: side-by-side */}
                       {/* Left panel: loaded cases list & search */}
                       <div 
-                        className="w-full lg:w-80 shrink-0 backdrop-blur-md border rounded-3xl p-5 shadow-sm flex flex-col gap-4 sticky top-[130px] lg:max-h-[calc(100vh-160px)] overflow-hidden"
+                        className={`w-full lg:w-80 shrink-0 backdrop-blur-md border rounded-3xl p-5 shadow-sm flex flex-col gap-4 sticky top-[130px] lg:max-h-[calc(100vh-160px)] overflow-hidden ${showMobileEditor ? 'hidden lg:flex' : 'flex'}`}
                         style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
                       >
                         <h4 className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text3)' }}>Loaded Case Diaries</h4>
@@ -3168,7 +3246,7 @@ export default function App() {
                               return (
                                 <div
                                   key={diary.id}
-                                  onClick={() => setSelectedDiaryId(diary.id)}
+                                  onClick={() => { setSelectedDiaryId(diary.id); setShowMobileEditor(true); }}
                                   className="group px-3 py-2.5 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer"
                                   style={isSelected ? {
                                     background: 'var(--th-primary)',
@@ -3241,9 +3319,18 @@ export default function App() {
                       </div>
 
                       {/* Right Panel: Editor Form */}
-                      <div className="flex-1 w-full flex flex-col gap-6">
+                      <div className={`flex-1 w-full flex-col gap-6 ${showMobileEditor ? 'flex' : 'hidden lg:flex'}`}>
                         {activeDiary ? (
                           <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                            {/* Mobile Back Button */}
+                            <button
+                              className="lg:hidden mb-3 flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+                              style={{ color: 'var(--th-primary)' }}
+                              onClick={() => setShowMobileEditor(false)}
+                            >
+                              <ArrowLeft className="w-4 h-4" />
+                              Back to Case List
+                            </button>
                             {/* Database active session indicator banner */}
                             {loadedDbId && (
                               <div className="mb-4 border rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
