@@ -37,7 +37,9 @@ import {
   Shield,
   Activity,
   Play,
-  Pause
+  Pause,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initAuth, googleSignIn, logout } from './firebase';
@@ -83,18 +85,36 @@ function OutlinedInput({ label, value, onChange, onClear, className = '', ...pro
         value={value}
         onChange={onChange}
         placeholder=" "
-        className={`peer w-full pt-5 pb-1.5 px-3.5 bg-white/60 focus:bg-white/95 border border-gray-200 focus:border-indigo-650 focus:ring-4 focus:ring-indigo-500/10 rounded-2xl text-xs font-semibold text-gray-900 focus:outline-none transition-all placeholder-transparent shadow-sm hover:border-gray-300 ${className}`}
+        className={`peer w-full pt-5 pb-1.5 px-3.5 border rounded-2xl text-xs font-semibold focus:outline-none transition-all placeholder-transparent shadow-sm ${className}`}
+        style={{
+          background: 'var(--th-input-bg)',
+          borderColor: 'var(--th-input-border)',
+          color: 'var(--th-text)',
+        }}
+        onFocus={e => {
+          e.currentTarget.style.background = 'var(--th-input-focus-bg)';
+          e.currentTarget.style.borderColor = 'var(--th-input-focus-border)';
+          e.currentTarget.style.boxShadow = '0 0 0 3px var(--th-input-focus-ring)';
+        }}
+        onBlur={e => {
+          e.currentTarget.style.background = 'var(--th-input-bg)';
+          e.currentTarget.style.borderColor = 'var(--th-input-border)';
+          e.currentTarget.style.boxShadow = 'none';
+        }}
         {...props}
       />
-      <label className="absolute left-3.5 top-3.5 text-xs font-bold text-gray-400 peer-placeholder-shown:text-xs peer-placeholder-shown:top-3.5 peer-placeholder-shown:left-3.5 peer-focus:top-1.5 peer-focus:left-3 peer-focus:text-[9px] peer-focus:text-indigo-650 transition-all pointer-events-none uppercase tracking-wider scale-100 peer-focus:scale-90 origin-top-left
-        peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:left-3 peer-[:not(:placeholder-shown)]:text-[9px] peer-[:not(:placeholder-shown)]:scale-90 peer-[:not(:placeholder-shown)]:text-indigo-650">
+      <label
+        className="absolute left-3.5 top-3.5 text-xs font-bold peer-placeholder-shown:text-xs peer-placeholder-shown:top-3.5 peer-placeholder-shown:left-3.5 peer-focus:top-1.5 peer-focus:left-3 peer-focus:text-[9px] transition-all pointer-events-none uppercase tracking-wider scale-100 peer-focus:scale-90 origin-top-left peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:left-3 peer-[:not(:placeholder-shown)]:text-[9px] peer-[:not(:placeholder-shown)]:scale-90"
+        style={{ color: 'var(--th-input-label)' }}
+      >
         {label}
       </label>
       {value && onClear && (
         <button
           type="button"
           onClick={onClear}
-          className="absolute right-3.5 top-3.5 text-gray-400 hover:text-gray-600 text-xs font-bold transition-all cursor-pointer z-10"
+          className="absolute right-3.5 top-3.5 text-xs font-bold transition-all cursor-pointer z-10"
+          style={{ color: 'var(--th-text4)' }}
         >
           ✕
         </button>
@@ -122,11 +142,28 @@ function OutlinedTextarea({ label, value, onChange, onVoiceClick, isListening, c
         onChange={onChange}
         placeholder=" "
         rows={rows}
-        className={`peer w-full pt-5 pb-1.5 pl-3.5 pr-12 bg-white/60 focus:bg-white/95 border border-gray-200 focus:border-indigo-650 focus:ring-4 focus:ring-indigo-500/10 rounded-2xl text-xs font-medium text-gray-900 focus:outline-none transition-all placeholder-transparent shadow-sm hover:border-gray-300 ${className}`}
+        className={`peer w-full pt-5 pb-1.5 pl-3.5 pr-12 border rounded-2xl text-xs font-medium focus:outline-none transition-all placeholder-transparent shadow-sm ${className}`}
+        style={{
+          background: 'var(--th-input-bg)',
+          borderColor: 'var(--th-input-border)',
+          color: 'var(--th-text)',
+        }}
+        onFocus={e => {
+          e.currentTarget.style.background = 'var(--th-input-focus-bg)';
+          e.currentTarget.style.borderColor = 'var(--th-input-focus-border)';
+          e.currentTarget.style.boxShadow = '0 0 0 3px var(--th-input-focus-ring)';
+        }}
+        onBlur={e => {
+          e.currentTarget.style.background = 'var(--th-input-bg)';
+          e.currentTarget.style.borderColor = 'var(--th-input-border)';
+          e.currentTarget.style.boxShadow = 'none';
+        }}
         {...props}
       />
-      <label className="absolute left-3.5 top-3.5 text-xs font-bold text-gray-400 peer-placeholder-shown:text-xs peer-placeholder-shown:top-3.5 peer-placeholder-shown:left-3.5 peer-focus:top-1.5 peer-focus:left-3 peer-focus:text-[9px] peer-focus:text-indigo-650 transition-all pointer-events-none uppercase tracking-wider scale-100 peer-focus:scale-90 origin-top-left
-        peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:left-3 peer-[:not(:placeholder-shown)]:text-[9px] peer-[:not(:placeholder-shown)]:scale-90 peer-[:not(:placeholder-shown)]:text-indigo-650">
+      <label
+        className="absolute left-3.5 top-3.5 text-xs font-bold peer-placeholder-shown:text-xs peer-placeholder-shown:top-3.5 peer-placeholder-shown:left-3.5 peer-focus:top-1.5 peer-focus:left-3 peer-focus:text-[9px] transition-all pointer-events-none uppercase tracking-wider scale-100 peer-focus:scale-90 origin-top-left peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:left-3 peer-[:not(:placeholder-shown)]:text-[9px] peer-[:not(:placeholder-shown)]:scale-90"
+        style={{ color: 'var(--th-input-label)' }}
+      >
         {label}
       </label>
       {onVoiceClick && (
@@ -136,14 +173,15 @@ function OutlinedTextarea({ label, value, onChange, onVoiceClick, isListening, c
           className={`absolute right-3.5 top-3 p-1.5 rounded-lg border transition-all cursor-pointer z-10 ${
             isListening
               ? 'bg-red-500 hover:bg-red-650 text-white border-red-600 animate-pulse-ripple'
-              : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 shadow-sm'
+              : 'hover:bg-sky-50 border-sky-200 hover:border-sky-300 shadow-sm'
           }`}
+          style={isListening ? {} : { color: 'var(--th-primary)', background: 'var(--th-surface)' }}
           title="Voice Typing (Tamil/English)"
         >
           {isListening ? (
             <MicOff className="w-3.5 h-3.5" />
           ) : (
-            <Mic className="w-3.5 h-3.5 text-indigo-500" />
+            <Mic className="w-3.5 h-3.5" />
           )}
         </button>
       )}
@@ -163,6 +201,23 @@ export default function App() {
   // Custom Selection Checkbox States
   const [selectedSearchCaseIds, setSelectedSearchCaseIds] = useState<{ dbId: string; diaryId: string }[]>([]);
   const [selectedWorkspaceCaseIds, setSelectedWorkspaceCaseIds] = useState<string[]>([]);
+
+  // Day / Night Theme State
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    try { return localStorage.getItem('theme') === 'dark'; } catch { return false; }
+  });
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const toggleTheme = () => setIsDarkMode(prev => !prev);
 
   // Admin Access Panel States
   const [adminAccessMap, setAdminAccessMap] = useState<Record<string, string[]>>({});
@@ -1262,125 +1317,132 @@ export default function App() {
   const roleInfo = getUserRole(user?.email);
 
   return (
-    <div className="min-h-screen bg-slate-50/40 flex flex-col antialiased relative pb-20 lg:pb-0">
+    <div className="min-h-screen flex flex-col antialiased relative pb-20 lg:pb-0" style={{ background: 'var(--th-bg)', color: 'var(--th-text)' }}>
       {/* Ambient shifting background gradient blobs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none select-none z-0">
-        <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] bg-indigo-200/30 rounded-full blur-[120px] animate-float-slow" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] bg-purple-200/25 rounded-full blur-[120px] animate-float-reverse" />
+        <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] amb-blob-1 rounded-full blur-[120px] animate-float-slow" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] amb-blob-2 rounded-full blur-[120px] animate-float-reverse" />
       </div>
 
       {/* Header Bar */}
-      <header className="border-b border-gray-200/80 bg-white/75 backdrop-blur-md sticky top-0 z-50 px-4 sm:px-6 py-3.5 shadow-sm">
+      <header className="border-b sticky top-0 z-50 px-4 sm:px-6 py-3.5 shadow-sm backdrop-blur-xl" style={{ background: 'var(--th-header-bg)', borderColor: 'var(--th-header-border)' }}>
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="p-2 bg-indigo-50 text-indigo-650 rounded-xl shrink-0 shadow-xs">
+            <div className="p-2 rounded-xl shrink-0 shadow-xs" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
               <Sparkles className="w-5 h-5 sm:w-5.5 sm:h-5.5" />
             </div>
             <div className="min-w-0">
-              <h1 className="font-display font-semibold text-sm sm:text-base text-gray-950 tracking-tight truncate">AI Case Diary Reconstruction Workspace</h1>
-              <p className="text-[9.5px] sm:text-[10px] text-gray-400 font-medium tracking-tight truncate">Reconstruct, Form and Format Scanned Case Diaries with Pixel Precision</p>
+              <h1 className="font-display font-semibold text-sm sm:text-base tracking-tight truncate" style={{ color: 'var(--th-text)' }}>AI Case Diary Reconstruction Workspace</h1>
+              <p className="text-[9.5px] sm:text-[10px] font-medium tracking-tight truncate" style={{ color: 'var(--th-text4)' }}>Reconstruct, Form and Format Scanned Case Diaries with Pixel Precision</p>
             </div>
           </div>
 
-          {user && (
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt={user.displayName || 'User'} className="w-8.5 h-8.5 rounded-full border-2 border-indigo-500/20 shadow-xs" referrerPolicy="no-referrer" />
-                ) : (
-                  <div className="w-8.5 h-8.5 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-650 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-                    {user.displayName?.charAt(0) || 'U'}
+          <div className="flex items-center gap-2">
+            {/* Day / Night Theme Toggle */}
+            <button
+              id="theme-toggle-btn"
+              onClick={toggleTheme}
+              className="theme-toggle-pill"
+              title={isDarkMode ? 'Switch to Day Mode' : 'Switch to Night Mode'}
+            >
+              <span className={`theme-toggle-icon ${!isDarkMode ? 'active' : 'inactive'}`}>
+                <Sun className="w-3.5 h-3.5" />
+              </span>
+              <span className={`theme-toggle-icon ${isDarkMode ? 'active' : 'inactive'}`}>
+                <Moon className="w-3.5 h-3.5" />
+              </span>
+            </button>
+
+            {user && (
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt={user.displayName || 'User'} className="w-8.5 h-8.5 rounded-full border-2 shadow-xs" style={{ borderColor: 'var(--th-border)' }} referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="w-8.5 h-8.5 rounded-full bg-gradient-to-tr from-sky-500 to-cyan-400 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                      {user.displayName?.charAt(0) || 'U'}
+                    </div>
+                  )}
+                  <div className="hidden sm:block text-right">
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <p className="text-xs font-bold leading-tight" style={{ color: 'var(--th-text)' }}>{user.displayName}</p>
+                      <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase border ${
+                        roleInfo.level === 'admin'
+                          ? 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                          : roleInfo.level === 'officer'
+                          ? 'bg-sky-500/10 text-sky-700 border-sky-500/30'
+                          : 'bg-slate-500/10 text-slate-700 border-slate-500/30'
+                      }`}>
+                        {roleInfo.badge}
+                      </span>
+                    </div>
+                    <p className="text-[9px] font-medium leading-none" style={{ color: 'var(--th-text4)' }}>{user.email}</p>
                   </div>
-                )}
-                <div className="hidden sm:block text-right">
-                  <div className="flex items-center gap-1.5 justify-end">
-                    <p className="text-xs font-bold text-gray-900 leading-tight">{user.displayName}</p>
-                    <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase border ${
-                      roleInfo.level === 'admin'
-                        ? 'bg-amber-500/10 text-amber-700 border-amber-500/30'
-                        : roleInfo.level === 'officer'
-                        ? 'bg-sky-500/10 text-sky-700 border-sky-500/30'
-                        : 'bg-slate-500/10 text-slate-700 border-slate-500/30'
-                    }`}>
-                      {roleInfo.badge}
-                    </span>
-                  </div>
-                  <p className="text-[9px] text-gray-400 font-medium leading-none">{user.email}</p>
                 </div>
+                <button 
+                  id="sign-out-btn"
+                  onClick={handleLogout} 
+                  className="p-1.5 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all cursor-pointer border shadow-xs backdrop-blur-xs"
+                  style={{ color: 'var(--th-text3)', borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}
+                  title="Sign Out"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
               </div>
-              <button 
-                id="sign-out-btn"
-                onClick={handleLogout} 
-                className="p-1.5 text-gray-450 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all cursor-pointer border border-gray-150/50 bg-white/70 backdrop-blur-xs shadow-xs"
-                title="Sign Out"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </header>
 
       {/* Desktop Horizontal Tabs bar */}
       {user && (
-        <div className="hidden lg:block bg-white/70 backdrop-blur-md border-b border-gray-200/80 sticky top-[61px] z-40">
+        <div className="hidden lg:block backdrop-blur-xl border-b sticky top-[61px] z-40" style={{ background: 'var(--th-header-bg)', borderColor: 'var(--th-header-border)' }}>
           <div className="max-w-7xl mx-auto px-8 py-2 flex items-center justify-between">
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => setActiveTab('gateway')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'gateway'
-                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
-                    : 'text-gray-500 hover:text-gray-800'
-                }`}
-              >
-                <UploadCloud className="w-4 h-4" />
-                Gateway Terminal
-              </button>
-              <button
-                onClick={() => setActiveTab('records')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'records'
-                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
-                    : 'text-gray-500 hover:text-gray-800'
-                }`}
-              >
-                <FileText className="w-4 h-4" />
-                Case Files & Databases
-              </button>
-              <button
-                onClick={() => setActiveTab('editor')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'editor'
-                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
-                    : 'text-gray-500 hover:text-gray-800'
-                }`}
-              >
-                <Edit3 className="w-4 h-4" />
-                Form Workspace
-              </button>
-              <button
-                onClick={() => setActiveTab('dashboard')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'dashboard'
-                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
-                    : 'text-gray-500 hover:text-gray-800'
-                }`}
-              >
-                <Shield className="w-4 h-4" />
-                {roleInfo.level === 'admin' ? 'SP Control Center' : 'System Dashboard'}
-              </button>
+              {(['gateway', 'records', 'editor', 'dashboard'] as const).map((tab) => {
+                const isActive = activeTab === tab;
+                const labels: Record<string, string> = {
+                  gateway: 'Gateway Terminal',
+                  records: 'Case Files & Databases',
+                  editor: 'Form Workspace',
+                  dashboard: roleInfo.level === 'admin' ? 'SP Control Center' : 'System Dashboard'
+                };
+                const icons: Record<string, React.ReactNode> = {
+                  gateway: <UploadCloud className="w-4 h-4" />,
+                  records: <FileText className="w-4 h-4" />,
+                  editor: <Edit3 className="w-4 h-4" />,
+                  dashboard: <Shield className="w-4 h-4" />
+                };
+                return (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer`}
+                    style={isActive ? {
+                      background: 'var(--th-tab-active-bg)',
+                      color: 'var(--th-tab-active-text)',
+                      border: '1px solid var(--th-border)',
+                    } : {
+                      color: 'var(--th-text4)',
+                      border: '1px solid transparent',
+                    }}
+                  >
+                    {icons[tab]}
+                    {labels[tab]}
+                  </button>
+                );
+              })}
             </div>
             
             {/* Quick overview */}
-            <div className="flex items-center gap-3 text-xs text-gray-400 font-semibold">
-              <span className="flex items-center gap-1 text-indigo-650 bg-indigo-50 px-2.5 py-1 rounded-lg">
+            <div className="flex items-center gap-3 text-xs font-semibold" style={{ color: 'var(--th-text4)' }}>
+              <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold" style={{ color: 'var(--th-primary)', background: 'var(--th-primary-xlight)' }}>
                 <Database className="w-3.5 h-3.5" />
                 {diaries.length} Diaries Loaded
               </span>
               {loadedDbName && (
-                <span className="text-gray-450">
-                  Active DB: <strong className="text-gray-650 font-bold">{loadedDbName}</strong>
+                <span style={{ color: 'var(--th-text3)' }}>
+                  Active DB: <strong style={{ color: 'var(--th-text2)' }}>{loadedDbName}</strong>
                 </span>
               )}
             </div>
@@ -1401,44 +1463,44 @@ export default function App() {
               transition={{ duration: 0.25 }}
               className="max-w-xl w-full mx-auto my-auto py-12 flex flex-col items-center z-10"
             >
-              <div className="w-full glass-panel rounded-3xl p-8 shadow-sm border border-white/20">
+              <div className="w-full rounded-3xl p-8 shadow-2xl border" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)', boxShadow: 'var(--th-card-shadow)' }}>
                 <div className="text-center mb-8">
-                  <div className="mx-auto w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4 border border-indigo-100/30">
+                  <div className="mx-auto w-12 h-12 rounded-2xl flex items-center justify-center mb-4 border" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)', borderColor: 'var(--th-border)' }}>
                     <Sparkles className="w-6 h-6 animate-pulse" />
                   </div>
-                  <h2 className="font-display font-semibold text-2xl text-gray-950 tracking-tight">Connect Workspace Profile</h2>
-                  <p className="text-sm text-gray-500 mt-2">
+                  <h2 className="font-display font-semibold text-2xl tracking-tight" style={{ color: 'var(--th-text)' }}>Connect Workspace Profile</h2>
+                  <p className="text-sm mt-2" style={{ color: 'var(--th-text3)' }}>
                     To reconstruct scanned documents or export to Google Drive seamlessly, authenticate securely using Google.
                   </p>
                 </div>
 
                 {/* Features Checklist */}
-                <div className="space-y-4 mb-8 bg-gray-50/50 p-5 rounded-2xl border border-gray-100">
+                <div className="space-y-4 mb-8 p-5 rounded-2xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
                   <div className="flex gap-3">
-                    <CheckCircle className="w-5 h-5 text-indigo-650 shrink-0 mt-0.5" />
+                    <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: 'var(--th-primary)' }} />
                     <div>
-                      <p className="text-xs font-semibold text-gray-800">Advanced Visual Document Extraction</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Gemini 2.5 Flash analyzes columns, structures, and handwritten remarks instantly.</p>
+                      <p className="text-xs font-semibold" style={{ color: 'var(--th-text2)' }}>Advanced Visual Document Extraction</p>
+                      <p className="text-[11px] mt-0.5 font-medium leading-relaxed" style={{ color: 'var(--th-text3)' }}>Gemini 2.5 Flash analyzes columns, structures, and handwritten remarks instantly.</p>
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <CheckCircle className="w-5 h-5 text-indigo-650 shrink-0 mt-0.5" />
+                    <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: 'var(--th-primary)' }} />
                     <div>
-                      <p className="text-xs font-semibold text-gray-800">Bilingual Translation Engine</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Transcribe typewriter and Tamil text inputs directly into readable multi-column outputs.</p>
+                      <p className="text-xs font-semibold" style={{ color: 'var(--th-text2)' }}>Bilingual Translation Engine</p>
+                      <p className="text-[11px] mt-0.5 font-medium leading-relaxed" style={{ color: 'var(--th-text3)' }}>Transcribe typewriter and Tamil text inputs directly into readable multi-column outputs.</p>
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <CheckCircle className="w-5 h-5 text-indigo-650 shrink-0 mt-0.5" />
+                    <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: 'var(--th-primary)' }} />
                     <div>
-                      <p className="text-xs font-semibold text-gray-800">Pixel Perfect Word Output</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Download editable .docx files perfectly matching the official Case Diary layout guidelines.</p>
+                      <p className="text-xs font-semibold" style={{ color: 'var(--th-text2)' }}>Pixel Perfect Word Output</p>
+                      <p className="text-[11px] mt-0.5 font-medium leading-relaxed" style={{ color: 'var(--th-text3)' }}>Download editable .docx files perfectly matching the official Case Diary layout guidelines.</p>
                     </div>
                   </div>
                 </div>
 
                 {authError && (
-                  <div className="mb-6 p-3 bg-red-50 text-red-700 text-xs rounded-xl flex items-start gap-2.5">
+                  <div className="mb-6 p-3 rounded-xl flex items-start gap-2.5 text-xs" style={{ background: 'var(--th-error-bg)', color: 'var(--th-error)', border: '1px solid var(--th-error-border)' }}>
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{authError}</span>
                   </div>
@@ -1449,7 +1511,8 @@ export default function App() {
                     id="gsi-login-btn"
                     onClick={handleLogin}
                     disabled={isLoggingIn}
-                    className="w-full flex items-center justify-center gap-3 px-6 py-3 border border-gray-300 rounded-2xl bg-white hover:bg-gray-50 text-gray-700 text-sm font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-60"
+                    className="w-full flex items-center justify-center gap-3 px-6 py-3 border rounded-2xl text-sm font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-60"
+                    style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}
                   >
                     {isLoggingIn ? (
                       <RefreshCw className="w-4 h-4 animate-spin text-gray-400" />
@@ -1464,7 +1527,7 @@ export default function App() {
                     <span>{isLoggingIn ? 'Connecting...' : 'Connect to Google Workspace'}</span>
                   </button>
 
-                  <p className="text-[10px] text-gray-400 mt-2 text-center leading-relaxed font-medium">
+                  <p className="text-[10px] mt-2 text-center leading-relaxed font-medium" style={{ color: 'var(--th-text4)' }}>
                     Please sign in using an authorized Google Workspace account. Access to other roles requires admin permission.
                   </p>
                 </div>
@@ -1482,9 +1545,9 @@ export default function App() {
               {activeTab === 'gateway' && (
                 <div className="max-w-2xl mx-auto w-full flex flex-col gap-6">
                   {/* Uploader Card */}
-                  <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm">
-                    <h3 className="font-display font-semibold text-gray-950 text-base mb-3 flex items-center gap-2">
-                      <Layers className="w-4 h-4 text-indigo-600" />
+                  <div className="backdrop-blur-md rounded-3xl p-6 shadow-sm border" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                    <h3 className="font-display font-semibold text-base mb-3 flex items-center gap-2" style={{ color: 'var(--th-text)' }}>
+                      <Layers className="w-4 h-4" style={{ color: 'var(--th-primary)' }} />
                       Reconstruct Scanned PDF
                     </h3>
                     
@@ -1496,10 +1559,9 @@ export default function App() {
                       onDrop={handleDrop}
                       onClick={triggerBrowse}
                       className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer flex flex-col items-center justify-center min-h-[160px] ${
-                        dragActive 
-                          ? 'border-indigo-600 bg-indigo-50/50' 
-                          : 'border-gray-200 hover:border-indigo-400 hover:bg-gray-50/50'
+                        dragActive ? 'drag-active' : ''
                       }`}
+                      style={dragActive ? {} : { borderColor: 'var(--th-border)', background: 'transparent' }}
                     >
                       <input 
                         type="file" 
@@ -1508,51 +1570,45 @@ export default function App() {
                         className="hidden" 
                         accept=".pdf"
                       />
-                      <div className="p-3 bg-indigo-50 text-indigo-600 rounded-full mb-3 shadow-xs">
+                      <div className="p-3 rounded-full mb-3 shadow-xs" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
                         <UploadCloud className="w-6 h-6" />
                       </div>
-                      <p className="text-xs font-semibold text-gray-800">
+                      <p className="text-xs font-semibold" style={{ color: 'var(--th-text2)' }}>
                         {selectedFile ? 'Change scanned PDF' : 'Select Case Diary PDF'}
                       </p>
-                      <p className="text-[10px] text-gray-400 mt-1 font-mono">
+                      <p className="text-[10px] mt-1 font-mono" style={{ color: 'var(--th-text4)' }}>
                         {selectedFile ? selectedFile.name : 'Drag & drop or click to browse'}
                       </p>
                     </div>
 
                     {/* Extraction Method Toggle */}
-                    <div className="mt-4 bg-gray-50/50 border border-gray-150 rounded-2xl p-3">
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-2">Extraction Mode</span>
+                    <div className="mt-4 rounded-2xl p-3 border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                      <span className="text-[10px] font-bold uppercase tracking-wider block mb-2" style={{ color: 'var(--th-text4)' }}>Extraction Mode</span>
                       <div className="grid grid-cols-2 gap-2.5">
                         <button
                           type="button"
                           onClick={() => setExtractionMode('free')}
-                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
-                            extractionMode === 'free'
-                              ? 'bg-white text-indigo-600 shadow-xs border-indigo-100'
-                              : 'text-gray-500 hover:text-gray-800 border-transparent bg-transparent'
-                          }`}
+                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border`}
+                          style={extractionMode === 'free' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', borderColor: 'var(--th-border)' } : { background: 'transparent', borderColor: 'transparent', color: 'var(--th-text3)' }}
                         >
                           <p className="text-xs font-bold flex items-center gap-1">
-                            <Check className={`w-3.5 h-3.5 ${extractionMode === 'free' ? 'text-indigo-650 font-bold' : 'text-transparent'}`} />
+                            <Check className={`w-3.5 h-3.5`} style={{ color: extractionMode === 'free' ? 'var(--th-primary)' : 'transparent' }} />
                             Unlimited Free
                           </p>
-                          <p className="text-[9px] text-gray-400 mt-1 ml-4 leading-normal font-medium">Local Browser OCR. Perfect for huge files.</p>
+                          <p className="text-[9px] mt-1 ml-4 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>Local Browser OCR. Perfect for huge files.</p>
                         </button>
                         
                         <button
                           type="button"
                           onClick={() => setExtractionMode('direct')}
-                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
-                            extractionMode === 'direct'
-                              ? 'bg-white text-indigo-600 shadow-xs border-indigo-100'
-                              : 'text-gray-500 hover:text-gray-800 border-transparent bg-transparent'
-                          }`}
+                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border`}
+                          style={extractionMode === 'direct' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', borderColor: 'var(--th-border)' } : { background: 'transparent', borderColor: 'transparent', color: 'var(--th-text3)' }}
                         >
                           <p className="text-xs font-bold flex items-center gap-1">
-                            <Check className={`w-3.5 h-3.5 ${extractionMode === 'direct' ? 'text-indigo-650 font-bold' : 'text-transparent'}`} />
+                            <Check className={`w-3.5 h-3.5`} style={{ color: extractionMode === 'direct' ? 'var(--th-primary)' : 'transparent' }} />
                             Cloud Upload
                           </p>
-                          <p className="text-[9px] text-gray-400 mt-1 ml-4 leading-normal font-medium">Direct Gemini. Max 4.5MB on Vercel.</p>
+                          <p className="text-[9px] mt-1 ml-4 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>Direct Gemini. Max 4.5MB on Vercel.</p>
                         </button>
                       </div>
                     </div>
@@ -1567,7 +1623,8 @@ export default function App() {
                         <button
                           id="start-convert-btn"
                           onClick={runExtraction}
-                          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 px-4 rounded-2xl text-xs font-semibold shadow-xs hover:shadow transition-all flex items-center justify-center gap-2 cursor-pointer"
+                          className="w-full text-white py-3 px-4 rounded-2xl text-xs font-semibold shadow-xs hover:shadow transition-all flex items-center justify-center gap-2 cursor-pointer"
+                          style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
                         >
                           <Sparkles className="w-4 h-4" />
                           AI Reconstruct & Format layout
@@ -1577,7 +1634,7 @@ export default function App() {
                     )}
 
                     {conversionError && (
-                      <div className="mt-4 p-3 bg-red-50 border border-red-100 text-red-700 text-xs rounded-xl flex gap-2.5">
+                      <div className="mt-4 p-3 border text-xs rounded-xl flex gap-2.5" style={{ background: 'var(--th-error-bg)', borderColor: 'var(--th-error-border)', color: 'var(--th-error)' }}>
                         <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                         <span>{conversionError}</span>
                       </div>
@@ -1588,22 +1645,24 @@ export default function App() {
                       <motion.div 
                         initial={{ opacity: 0, scale: 0.98 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        className="mt-4 p-5 border border-indigo-100 bg-indigo-50/15 rounded-2xl shadow-[0_4px_20px_rgba(79,70,229,0.05)] flex flex-col gap-3"
+                        className="mt-4 p-5 border rounded-2xl flex flex-col gap-3"
+                        style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <RefreshCw className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
-                            <span className="text-xs font-bold text-gray-950">AI Reconstruction Pipeline</span>
+                            <RefreshCw className="w-4 h-4 animate-spin shrink-0" style={{ color: 'var(--th-primary)' }} />
+                            <span className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>AI Reconstruction Pipeline</span>
                           </div>
-                          <span className="text-xs font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
+                          <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md" style={{ color: 'var(--th-primary)', background: 'var(--th-surface)' }}>
                             {extractionProgress}%
                           </span>
                         </div>
 
                         {/* Animated Progress Bar Track */}
-                        <div className="w-full h-2.5 bg-gray-150 rounded-full overflow-hidden relative border border-gray-200/50">
+                        <div className="w-full h-2.5 rounded-full overflow-hidden relative border" style={{ background: 'var(--th-border2)', borderColor: 'var(--th-border)' }}>
                           <motion.div 
-                            className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full relative"
+                            className="h-full rounded-full relative"
+                            style={{ background: 'linear-gradient(90deg, var(--th-primary), var(--th-accent), #0891b2)' }}
                             initial={{ width: '0%' }}
                             animate={{ width: `${extractionProgress}%` }}
                             transition={{ duration: 0.3, ease: "easeOut" }}
@@ -1664,29 +1723,23 @@ export default function App() {
               {activeTab === 'records' && (
                 <div className="max-w-3xl mx-auto w-full flex flex-col gap-6">
                   {/* Tabbed Record Selector & Database Library */}
-                  <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-[0_4px_30px_rgba(0,0,0,0.02)] flex-1 flex flex-col min-h-[420px]">
+                  <div className="backdrop-blur-md rounded-3xl p-6 shadow-sm border flex-1 flex flex-col min-h-[420px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)', boxShadow: 'var(--th-card-shadow)' }}>
                     {/* Tab Headers */}
-                    <div className="flex items-center border-b border-gray-150 mb-4 bg-gray-50/60 p-1.5 rounded-xl gap-0.5">
+                    <div className="flex items-center border-b mb-4 p-1.5 rounded-xl gap-0.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                       <button
                         onClick={() => setSidebarTab('workspace')}
-                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer ${
-                          sidebarTab === 'workspace'
-                            ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
-                            : 'text-gray-500 hover:text-gray-800'
-                        }`}
+                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer`}
+                        style={sidebarTab === 'workspace' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', border: '1px solid var(--th-border)' } : { color: 'var(--th-text4)' }}
                       >
                         <Layers className="w-3.5 h-3.5" />
                         Workspace ({diaries.length})
                       </button>
                       <button
                         onClick={() => setSidebarTab('history')}
-                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer relative ${
-                          sidebarTab === 'history'
-                            ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
-                            : 'text-gray-500 hover:text-gray-800'
-                        }`}
+                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer relative`}
+                        style={sidebarTab === 'history' ? { background: 'var(--th-surface)', color: 'var(--th-primary)', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', border: '1px solid var(--th-border)' } : { color: 'var(--th-text4)' }}
                       >
-                        <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                        <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--th-primary)' }} />
                         Supabase Cloud DB ({savedDatabases.length})
                         {supabaseStatus?.isConfigured && (
                           <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
@@ -1697,8 +1750,8 @@ export default function App() {
                     {sidebarTab === 'workspace' && (
                       <div className="flex-1 flex flex-col">
                         <div className="flex items-center justify-between mb-3.5">
-                          <h3 className="font-display font-semibold text-gray-900 text-xs flex items-center gap-1.5">
-                            <ListFilter className="w-3.5 h-3.5 text-indigo-600" />
+                          <h3 className="font-display font-semibold text-xs flex items-center gap-1.5" style={{ color: 'var(--th-text)' }}>
+                            <ListFilter className="w-3.5 h-3.5" style={{ color: 'var(--th-primary)' }} />
                             Reconstructed Records
                           </h3>
                           
@@ -1706,7 +1759,8 @@ export default function App() {
                             <div className="flex items-center gap-1.5">
                               <button
                                 onClick={handleMarkAllAsSaved}
-                                className="text-[9px] text-indigo-600 hover:text-indigo-800 bg-indigo-50/70 hover:bg-indigo-100/80 font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer"
+                                className="text-[9px] font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer"
+                                style={{ color: 'var(--th-primary)', background: 'var(--th-primary-xlight)' }}
                                 title="Mark all current cases as saved drafts"
                               >
                                 Mark Saved
@@ -1719,7 +1773,8 @@ export default function App() {
                                   setDbNameInput(`Database - CR No ${crimeNo} - ${station}`);
                                   setShowSaveDbPrompt(true);
                                 }}
-                                className="text-[9px] text-purple-605 hover:text-purple-800 bg-purple-50/70 hover:bg-purple-100/80 font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer flex items-center gap-0.5"
+                                className="text-[9px] font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer flex items-center gap-0.5"
+                                style={{ color: '#7c3aed', background: '#f5f3ff' }}
                                 title="Save this entire set to Database"
                               >
                                 <Save className="w-2.5 h-2.5" />
@@ -1731,7 +1786,7 @@ export default function App() {
 
                         {diaries.length > 0 && (
                           <div className="relative mb-3.5">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none" style={{ color: 'var(--th-text4)' }}>
                               <Search className="w-3.5 h-3.5" />
                             </div>
                             <input
@@ -1739,12 +1794,14 @@ export default function App() {
                               placeholder="Search by Crime No. or Station..."
                               value={searchQuery}
                               onChange={(e) => setSearchQuery(e.target.value)}
-                              className="w-full pl-8 pr-4 py-1.5 bg-gray-55 hover:bg-gray-100/50 focus:bg-white border border-gray-200/80 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg text-xs text-gray-900 placeholder-gray-400 font-medium transition-all"
+                              className="w-full pl-8 pr-4 py-1.5 border rounded-lg text-xs font-medium transition-all"
+                              style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)', color: 'var(--th-text)' }}
                             />
                             {searchQuery && (
                               <button
                                 onClick={() => setSearchQuery('')}
-                                className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-gray-400 hover:text-gray-600 font-bold cursor-pointer"
+                                className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs font-bold cursor-pointer"
+                                style={{ color: 'var(--th-text4)' }}
                               >
                                 ✕
                               </button>
@@ -1753,10 +1810,10 @@ export default function App() {
                         )}
 
                         {diaries.length === 0 ? (
-                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-gray-50/50 rounded-2xl border border-gray-100 min-h-[250px]">
-                            <FileText className="w-8 h-8 text-gray-300 mb-2" />
-                            <p className="text-xs font-semibold text-gray-500">No documents loaded</p>
-                            <p className="text-[10px] text-gray-400 mt-1 max-w-[190px] leading-relaxed">
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 rounded-2xl border min-h-[250px]" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                            <FileText className="w-8 h-8 mb-2" style={{ color: 'var(--th-border)' }} />
+                            <p className="text-xs font-semibold" style={{ color: 'var(--th-text3)' }}>No documents loaded</p>
+                            <p className="text-[10px] mt-1 max-w-[190px] leading-relaxed" style={{ color: 'var(--th-text4)' }}>
                               Upload your scanned police case diary PDF under <strong>Gateway Terminal</strong> tab to begin reconstruction.
                             </p>
                           </div>
@@ -1776,44 +1833,35 @@ export default function App() {
                                   );
                                 })
                                 .map((diary) => {
-                                  const isSelected = selectedDiaryId === diary.id;
                                   const isChecked = selectedWorkspaceCaseIds.includes(diary.id);
                                   return (
                                     <div
                                       key={diary.id}
-                                      className={`w-full rounded-2xl border transition-all flex items-center p-3 gap-2.5 cursor-pointer ${
-                                        isSelected 
-                                          ? 'border-indigo-300 bg-indigo-50/30 shadow-xs' 
-                                          : 'border-gray-100 bg-gray-55/10 hover:bg-gray-50/50'
-                                      }`}
+                                      className="w-full rounded-2xl border transition-all flex items-center p-3 gap-2.5 cursor-pointer"
+                                      style={isChecked ? { borderColor: 'var(--th-primary)', background: 'var(--th-primary-xlight)' } : { borderColor: 'var(--th-border2)', background: 'var(--th-surface2)' }}
                                       onClick={() => {
-                                        setSelectedDiaryId(diary.id);
-                                        setActiveTab('editor');
+                                        setSelectedWorkspaceCaseIds(prev => {
+                                          if (prev.includes(diary.id)) {
+                                            return prev.filter(id => id !== diary.id);
+                                          } else {
+                                            return [...prev, diary.id];
+                                          }
+                                        });
                                       }}
                                     >
                                       <input
                                         type="checkbox"
                                         checked={isChecked}
-                                        onChange={(e) => {
-                                          e.stopPropagation();
-                                          setSelectedWorkspaceCaseIds(prev => {
-                                            if (prev.includes(diary.id)) {
-                                              return prev.filter(id => id !== diary.id);
-                                            } else {
-                                              return [...prev, diary.id];
-                                            }
-                                          });
-                                        }}
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="w-3.5 h-3.5 rounded text-indigo-655 focus:ring-indigo-500 border-gray-300 cursor-pointer shrink-0"
+                                        readOnly
+                                        className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer shrink-0"
                                       />
-                                      <div className={`p-2 rounded-xl shrink-0 ${isSelected ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100/85 text-gray-400'}`}>
+                                      <div className="p-2 rounded-xl shrink-0" style={isChecked ? { background: 'var(--th-primary-light)', color: 'var(--th-primary)' } : { background: 'var(--th-surface)', color: 'var(--th-text4)' }}>
                                         <FileText className="w-4 h-4" />
                                       </div>
                                       
                                       <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-1.5 justify-between">
-                                          <p className="text-xs font-semibold text-gray-900 truncate">
+                                          <p className="text-xs font-semibold truncate" style={{ color: 'var(--th-text)' }}>
                                             {diary.crNoAndSecOfLaw || 'Case Diary Entry'}
                                           </p>
                                           
@@ -1821,7 +1869,8 @@ export default function App() {
                                             {/* Delete record from workspace */}
                                             <button
                                               onClick={(e) => handleDeleteWorkspaceDiary(diary.id, e)}
-                                              className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                              className="p-1 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                              style={{ color: 'var(--th-text4)' }}
                                               title="Delete record from active workspace"
                                             >
                                               <Trash2 className="w-3.5 h-3.5" />
@@ -1833,8 +1882,9 @@ export default function App() {
                                               className={`p-1 rounded-full border transition-all ${
                                                 diary.isSavedDraft
                                                   ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-200'
-                                                  : 'bg-white border-gray-200 text-gray-300 hover:border-indigo-350 hover:text-indigo-650'
+                                                  : 'hover:border-sky-350 hover:text-sky-650'
                                               }`}
+                                              style={diary.isSavedDraft ? {} : { background: 'var(--th-surface)', borderColor: 'var(--th-border)', color: 'var(--th-text4)' }}
                                               title={diary.isSavedDraft ? "Saved Draft (Click to toggle)" : "Unsaved Draft (Click to save)"}
                                             >
                                               <Check className="w-3 h-3" />
@@ -1842,13 +1892,13 @@ export default function App() {
                                           </div>
                                         </div>
                                         
-                                        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-gray-400">
+                                        <div className="flex items-center gap-1.5 mt-0.5 text-[10px]" style={{ color: 'var(--th-text4)' }}>
                                           <span className="font-medium truncate">{diary.policeStation}</span>
                                           <span>•</span>
-                                          <span className="font-semibold text-indigo-600">{diary.dateOfCd}</span>
+                                          <span className="font-semibold" style={{ color: 'var(--th-primary)' }}>{diary.dateOfCd}</span>
                                         </div>
                                       </div>
-                                      <ChevronRight className={`w-4 h-4 transition-transform shrink-0 ${isSelected ? 'text-indigo-600 translate-x-0.5' : 'text-gray-300'}`} />
+                                      <ChevronRight className="w-4 h-4 transition-transform shrink-0" style={{ color: isChecked ? 'var(--th-primary)' : 'var(--th-border)' }} />
                                     </div>
                                   );
                                 })}
@@ -1868,9 +1918,9 @@ export default function App() {
                             </div>
 
                             {/* Bulk Export Section */}
-                            <div className="mt-4 pt-3.5 border-t border-gray-100 bg-indigo-50/15 p-3.5 rounded-2xl border border-indigo-100/50">
+                            <div className="mt-4 pt-3.5 border-t p-3.5 rounded-2xl border" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
                               <div className="flex items-center justify-between mb-2">
-                                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Bulk Export Status</span>
+                                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text3)' }}>Bulk Export Status</span>
                                 <span className="px-2.5 py-0.5 bg-green-105 text-green-700 border border-green-200/55 text-[10px] font-bold rounded-full">
                                   {diaries.filter(d => d.isSavedDraft).length} / {diaries.length} Saved
                                 </span>
@@ -1889,7 +1939,8 @@ export default function App() {
                                         addLocalLog(`Loaded ${loaded.length} selected cases into workspace`, 'SYSTEM');
                                       }
                                     }}
-                                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer animate-pulse-ripple"
+                                    className="flex-1 text-white py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                    style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
                                   >
                                     <Layers className="w-3.5 h-3.5" />
                                     Load Data ({selectedWorkspaceCaseIds.length})
@@ -1897,7 +1948,8 @@ export default function App() {
                                   <button
                                     onClick={handleBulkExportZip}
                                     disabled={isBulkExporting}
-                                    className="flex-1 bg-purple-605 hover:bg-purple-700 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                    className="flex-1 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                    style={{ background: '#7c3aed' }}
                                   >
                                     {isBulkExporting ? (
                                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -1911,7 +1963,8 @@ export default function App() {
                                 <button
                                   onClick={handleBulkExportZip}
                                   disabled={isBulkExporting}
-                                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                  className="w-full disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                  style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
                                 >
                                   {isBulkExporting ? (
                                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -1921,7 +1974,7 @@ export default function App() {
                                   Bulk Export Saved Drafts (.ZIP)
                                 </button>
                               )}
-                              <p className="text-[9px] text-gray-400 mt-1.5 text-center leading-normal">
+                              <p className="text-[9px] mt-1.5 text-center leading-normal" style={{ color: 'var(--th-text4)' }}>
                                 Only case diaries with completed draft saves will be included in the exported ZIP archive.
                               </p>
                             </div>
@@ -1933,10 +1986,10 @@ export default function App() {
                     {sidebarTab === 'history' && (
                       <div className="flex-1 flex flex-col">
                         {/* Connection Status Indicator */}
-                        <div className="flex items-center justify-between mb-3 bg-gray-55/75 p-2.5 rounded-xl border border-gray-150">
+                        <div className="flex items-center justify-between mb-3 p-2.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                            <span className="text-[10px] font-bold text-gray-700 truncate">
+                            <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--th-primary)' }} />
+                            <span className="text-[10px] font-bold truncate" style={{ color: 'var(--th-text2)' }}>
                               {supabaseStatus?.isConfigured ? 'Supabase Connected' : 'Supabase Offline'}
                             </span>
                             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-400'}`} />
@@ -1944,14 +1997,16 @@ export default function App() {
                           <div className="flex items-center gap-1 shrink-0">
                             <button
                               onClick={() => setActiveTab('dashboard')}
-                              className="text-[9.5px] font-bold text-indigo-650 hover:text-indigo-850 px-1.5 py-0.5 rounded transition-all cursor-pointer hover:bg-white"
+                              className="text-[9.5px] font-bold px-1.5 py-0.5 rounded transition-all cursor-pointer"
+                              style={{ color: 'var(--th-primary)' }}
                             >
                               Show Setup
                             </button>
                             <button
                               onClick={fetchSupabaseStatus}
                               disabled={isLoadingSupaStatus}
-                              className="p-1 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-gray-800 disabled:opacity-50 cursor-pointer"
+                              className="p-1 hover:bg-gray-200 dark:hover:bg-slate-700 rounded transition-colors disabled:opacity-50 cursor-pointer"
+                              style={{ color: 'var(--th-text3)' }}
                               title="Refresh connection status"
                             >
                               <RefreshCw className={`w-3 h-3 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
@@ -2107,15 +2162,15 @@ export default function App() {
                 <div className="w-full flex flex-col gap-6">
                   {/* Extraction Control Panel inside Workspace */}
                   {selectedFile && (
-                    <div className="bg-white/85 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm flex flex-col gap-4">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-150">
+                    <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col gap-4" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b" style={{ borderColor: 'var(--th-border)' }}>
                         <div className="flex items-center gap-3">
-                          <div className="p-2.5 bg-indigo-50 text-indigo-650 rounded-xl">
+                          <div className="p-2.5 rounded-xl" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
                             <Layers className="w-5 h-5" />
                           </div>
                           <div>
-                            <h4 className="text-sm font-bold text-gray-955">Extraction Gateway Terminal</h4>
-                            <p className="text-[11px] text-gray-400 font-medium">Reconstruct selected PDF: <strong className="text-gray-600 font-bold">{selectedFile.name}</strong></p>
+                            <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>Extraction Gateway Terminal</h4>
+                            <p className="text-[11px] font-medium" style={{ color: 'var(--th-text4)' }}>Reconstruct selected PDF: <strong style={{ color: 'var(--th-text2)' }}>{selectedFile.name}</strong></p>
                           </div>
                         </div>
                         {isExtracting && (
@@ -2238,9 +2293,9 @@ export default function App() {
 
                   {/* Inline Case Navigation and Search bar inside Workspace */}
                   {diaries.length > 0 && (
-                    <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div className="backdrop-blur-md border rounded-3xl p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
                       <div className="flex-1 min-w-0">
-                        <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider block mb-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider block mb-2" style={{ color: 'var(--th-text4)' }}>
                           Select Case Number to Edit ({diaries.length} cases in workspace)
                         </span>
                         <div className="flex flex-wrap gap-2 max-h-[140px] overflow-y-auto pr-1">
@@ -2250,11 +2305,8 @@ export default function App() {
                               <button
                                 key={diary.id}
                                 onClick={() => setSelectedDiaryId(diary.id)}
-                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5 ${
-                                  isSelected
-                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                                }`}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5`}
+                                style={isSelected ? { background: 'var(--th-primary)', color: 'white', borderColor: 'var(--th-primary)' } : { background: 'var(--th-surface)', color: 'var(--th-text2)', borderColor: 'var(--th-border)' }}
                               >
                                 <FileText className="w-3.5 h-3.5" />
                                 <span className="truncate max-w-[150px]">
@@ -2267,154 +2319,6 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Dropdown Workspace Search Widget */}
-                      <div className="relative shrink-0 w-full md:w-auto self-end md:self-center">
-                        <button
-                          onClick={() => setShowWorkspaceSearch(!showWorkspaceSearch)}
-                          className="w-full md:w-auto px-4 py-2 border border-gray-250 bg-white hover:bg-gray-50 text-gray-605 hover:text-indigo-650 rounded-xl transition-all cursor-pointer shadow-xs flex items-center justify-center gap-2 font-bold text-xs"
-                          title="Search and load a saved database or case"
-                        >
-                          <Search className="w-4 h-4 text-indigo-500" />
-                          Load/Search Case
-                        </button>
-                                           {showWorkspaceSearch && (() => {
-                          const query = workspaceSearchQuery.toLowerCase().trim();
-                          const matches: { db: SavedDatabase; diary: CaseDiary; matchText: string }[] = [];
-                          
-                          savedDatabases.forEach((db) => {
-                            db.diaries.forEach((diary) => {
-                              const crNo = diary.crNoAndSecOfLaw || '';
-                              const station = diary.policeStation || '';
-                              const dateOfCd = diary.dateOfCd || '';
-                              
-                              if (!query || 
-                                  db.name.toLowerCase().includes(query) ||
-                                  crNo.toLowerCase().includes(query) ||
-                                  station.toLowerCase().includes(query) ||
-                                  dateOfCd.toLowerCase().includes(query)
-                              ) {
-                                matches.push({
-                                  db,
-                                  diary,
-                                  matchText: `${crNo} (${dateOfCd}) - ${station}`
-                                });
-                              }
-                            });
-                          });
-                          
-                          return (
-                            <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-2xl shadow-xl p-3.5 z-50 animate-fade-in">
-                              <div className="flex items-center justify-between pb-2 border-b border-gray-100 mb-2">
-                                <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider">Search Case Library</span>
-                                <button 
-                                  onClick={() => {
-                                    setShowWorkspaceSearch(false);
-                                    setSelectedSearchCaseIds([]);
-                                  }}
-                                  className="text-gray-400 hover:text-gray-600 font-bold text-xs"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                              <input
-                                type="text"
-                                placeholder="Search past case no, station, or DB..."
-                                value={workspaceSearchQuery}
-                                onChange={(e) => setWorkspaceSearchQuery(e.target.value)}
-                                className="w-full px-3 py-1.5 border border-gray-200 focus:border-indigo-500 rounded-xl text-xs font-semibold text-gray-900 shadow-sm focus:outline-none"
-                                autoFocus
-                              />
-                              <div className="mt-2.5 max-h-60 overflow-y-auto space-y-1.5 pr-1">
-                                {matches.length === 0 ? (
-                                  <p className="text-[10px] text-gray-400 text-center py-4 font-semibold">No matching cases found</p>
-                                ) : (
-                                  matches.map(({ db, diary }, idx) => {
-                                    const isChecked = selectedSearchCaseIds.some(
-                                      (item) => item.dbId === db.id && item.diaryId === diary.id
-                                    );
-                                    return (
-                                      <div
-                                        key={`${db.id}-${diary.id}-${idx}`}
-                                        onClick={() => {
-                                          setDiaries([diary]);
-                                          setSelectedDiaryId(diary.id);
-                                          setLoadedDbId(db.id);
-                                          setLoadedDbName(db.name);
-                                          setIsSaved(true);
-                                          setShowWorkspaceSearch(false);
-                                          setWorkspaceSearchQuery('');
-                                          setSelectedSearchCaseIds([]);
-                                          addLocalLog(`Loaded case "${diary.crNoAndSecOfLaw}" inline from database "${db.name}"`, 'SYSTEM');
-                                        }}
-                                        className="w-full text-left p-2 rounded-xl hover:bg-indigo-50/50 hover:text-indigo-950 transition-all text-[11px] font-semibold text-gray-700 flex items-center gap-2.5 border border-transparent hover:border-indigo-100 cursor-pointer"
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={isChecked}
-                                          onChange={(e) => {
-                                            e.stopPropagation();
-                                            setSelectedSearchCaseIds(prev => {
-                                              const exists = prev.some(item => item.dbId === db.id && item.diaryId === diary.id);
-                                              if (exists) {
-                                                return prev.filter(item => !(item.dbId === db.id && item.diaryId === diary.id));
-                                              } else {
-                                                return [...prev, { dbId: db.id, diaryId: diary.id }];
-                                              }
-                                            });
-                                          }}
-                                          onClick={(e) => e.stopPropagation()}
-                                          className="w-3.5 h-3.5 rounded text-indigo-650 focus:ring-indigo-500 border-gray-300 cursor-pointer shrink-0"
-                                        />
-                                        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                                          <span className="text-indigo-955 truncate font-bold">{diary.crNoAndSecOfLaw}</span>
-                                          <span className="text-[9.5px] text-gray-400 truncate">Station: {diary.policeStation} • DB: {db.name}</span>
-                                        </div>
-                                      </div>
-                                    );
-                                  })
-                                )}
-                              </div>
-                              
-                              {matches.length > 0 && (
-                                <div className="mt-3 pt-2 border-t border-gray-100 flex justify-between items-center">
-                                  <span className="text-[10.5px] font-bold text-gray-500">
-                                    {selectedSearchCaseIds.length} Selected
-                                  </span>
-                                  <button
-                                    onClick={() => {
-                                      const selectedDiaries = matches
-                                        .filter(m => selectedSearchCaseIds.some(s => s.dbId === m.db.id && s.diaryId === m.diary.id))
-                                        .map(m => m.diary);
-                                      
-                                      if (selectedDiaries.length > 0) {
-                                        setDiaries(selectedDiaries);
-                                        setSelectedDiaryId(selectedDiaries[0].id);
-                                        
-                                        const firstMatch = matches.find(m => selectedSearchCaseIds.some(s => s.dbId === m.db.id && s.diaryId === m.diary.id));
-                                        if (firstMatch) {
-                                          setLoadedDbId(firstMatch.db.id);
-                                          setLoadedDbName(firstMatch.db.name);
-                                        }
-                                        
-                                        setIsSaved(true);
-                                        setShowWorkspaceSearch(false);
-                                        setWorkspaceSearchQuery('');
-                                        setSelectedSearchCaseIds([]);
-                                        addLocalLog(`Loaded ${selectedDiaries.length} selected cases inline`, 'SYSTEM');
-                                      } else {
-                                        alert("Please check at least one case to load.");
-                                      }
-                                    }}
-                                    className="px-3 py-1.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-[10.5px] font-bold shadow-xs hover:shadow-sm transition-all cursor-pointer"
-                                  >
-                                    Load Selected Cases
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
                     </div>
                   )}
 
@@ -2479,21 +2383,22 @@ export default function App() {
                   )}
 
                   {activeDiary ? (
-                    <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]">
+                    <div className="backdrop-blur-md border rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
                       
                       {/* Database active session indicator banner */}
                       {loadedDbId && (
-                        <div className="mb-4 bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in">
+                        <div className="mb-4 border rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)' }}>
                           <div className="flex items-center gap-2">
-                            <Database className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <Database className="w-4 h-4 shrink-0" style={{ color: 'var(--th-primary)' }} />
                             <div>
-                              <p className="text-xs font-bold text-indigo-950">Active Database Session: <span className="underline">{loadedDbName}</span></p>
-                              <p className="text-[10px] text-indigo-700/80 font-medium">Any changes you make here can be synced directly back to your database library.</p>
+                              <p className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Active Database Session: <span className="underline">{loadedDbName}</span></p>
+                              <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Any changes you make here can be synced directly back to your database library.</p>
                             </div>
                           </div>
                           <button
                             onClick={handleUpdateDatabase}
-                            className="bg-indigo-650 hover:bg-indigo-755 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                            className="text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                            style={{ background: 'var(--th-primary)' }}
                           >
                             <Save className="w-3.5 h-3.5" />
                             Sync Updates to DB
@@ -2502,14 +2407,14 @@ export default function App() {
                       )}
                       
                       {/* Workspace Header Actions */}
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b border-gray-100">
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b" style={{ borderColor: 'var(--th-border)' }}>
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="px-2 py-0.5 bg-green-50 text-green-700 text-[10px] font-bold rounded-md border border-green-200/50">VERIFIED PREVIEW</span>
-                            <span className="text-[10px] text-gray-400 font-semibold">{activeDiary.dateOfCd}</span>
+                            <span className="text-[10px] font-semibold" style={{ color: 'var(--th-text4)' }}>{activeDiary.dateOfCd}</span>
                           </div>
-                          <h2 className="font-display font-bold text-gray-955 text-lg mt-1">{activeDiary.crNoAndSecOfLaw}</h2>
-                          <p className="text-xs text-gray-400 font-medium">Reconstructed Case Diary • Station: {activeDiary.policeStation}</p>
+                          <h2 className="font-display font-bold text-lg mt-1" style={{ color: 'var(--th-text)' }}>{activeDiary.crNoAndSecOfLaw}</h2>
+                          <p className="text-xs font-medium" style={{ color: 'var(--th-text4)' }}>Reconstructed Case Diary • Station: {activeDiary.policeStation}</p>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-stretch sm:self-auto justify-end">
@@ -2559,8 +2464,8 @@ export default function App() {
                       <div className="space-y-6 mt-6 max-h-[680px] overflow-y-auto pr-1">
                         
                         {/* Section 1: Headers */}
-                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
-                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">I. Administration & Registry</h4>
+                        <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                          <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>I. Administration & Registry</h4>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <OutlinedInput
                               label="Police Station"
@@ -2590,8 +2495,8 @@ export default function App() {
                         </div>
 
                         {/* Section 2: General parameters */}
-                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
-                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">II. Occurrence & Complainant Details</h4>
+                        <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                          <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>II. Occurrence & Complainant Details</h4>
                           <div className="space-y-4">
                             <OutlinedTextarea
                               label="Date, Time & Place of Occurrence"
@@ -2615,12 +2520,13 @@ export default function App() {
                         </div>
 
                         {/* Section 3: Accused List Table */}
-                        <div className="p-4 border border-gray-200 rounded-xl space-y-3.5">
+                        <div className="p-4 border rounded-xl space-y-3.5" style={{ borderColor: 'var(--th-border)' }}>
                           <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">III. Accused Details</h4>
+                            <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>III. Accused Details</h4>
                             <button
                               onClick={addAccusedRow}
-                              className="text-[10px] bg-indigo-50 text-indigo-650 hover:bg-indigo-100 font-bold px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors"
+                              className="text-[10px] font-bold px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors"
+                              style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}
                             >
                               <Plus className="w-3.5 h-3.5" />
                               Add Accused
@@ -2630,7 +2536,7 @@ export default function App() {
                           {/* List representation of accused for seamless editing */}
                           <div className="space-y-3">
                             {activeDiary.accusedList.map((acc, index) => (
-                              <div key={index} className="flex gap-2 items-center bg-gray-50/30 p-2.5 rounded-xl border border-gray-150">
+                              <div key={index} className="flex gap-2 items-center p-2.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                                 <span className="text-[11px] font-bold text-gray-400 w-6 text-center">{acc.sNo}</span>
                                 <OutlinedInput
                                   label={`Accused ${acc.sNo} Name & Address`}
@@ -2678,9 +2584,9 @@ export default function App() {
                         </div>
 
                         {/* Section 5: Stage of Case and Court specifics */}
-                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
+                        <div className="p-4 border rounded-xl space-y-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                           <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">VI. Stage & Court Administration</h4>
+                            <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>VI. Stage & Court Administration</h4>
                             <button
                               type="button"
                               onClick={() => {
@@ -2729,86 +2635,68 @@ export default function App() {
                         </div>
 
                         {/* Section 6: Specific Hearing Checks (Boolean YES/NO switches) */}
-                        <div className="p-4 border border-gray-200 rounded-xl space-y-4">
-                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">Hearing Parameters & Checks</h4>
+                        <div className="p-4 border rounded-xl space-y-4" style={{ borderColor: 'var(--th-border)' }}>
+                          <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-primary)' }}>Hearing Parameters & Checks</h4>
                           
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div>
-                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">Magistrate Present?</label>
-                              <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-205">
+                              <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>Magistrate Present?</label>
+                              <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                                 <button
                                   type="button"
                                   onClick={() => handleFieldChange('whetherMagistratePresent', 'YES')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                    activeDiary.whetherMagistratePresent === 'YES'
-                                      ? 'bg-indigo-650 text-white shadow-xs'
-                                      : 'text-gray-500 hover:text-gray-800'
-                                  }`}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                  style={activeDiary.whetherMagistratePresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
                                 >
                                   YES
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleFieldChange('whetherMagistratePresent', 'NO')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                    activeDiary.whetherMagistratePresent === 'NO'
-                                      ? 'bg-indigo-650 text-white shadow-xs'
-                                      : 'text-gray-500 hover:text-gray-800'
-                                  }`}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                  style={activeDiary.whetherMagistratePresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
                                 >
                                   NO
                                 </button>
                               </div>
                             </div>
                             <div>
-                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">APP / PP Present?</label>
-                              <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-205">
+                              <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>APP / PP Present?</label>
+                              <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                                 <button
                                   type="button"
                                   onClick={() => handleFieldChange('whetherAppPpPresent', 'YES')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                    activeDiary.whetherAppPpPresent === 'YES'
-                                      ? 'bg-indigo-650 text-white shadow-xs'
-                                      : 'text-gray-500 hover:text-gray-800'
-                                  }`}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                  style={activeDiary.whetherAppPpPresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
                                 >
                                   YES
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleFieldChange('whetherAppPpPresent', 'NO')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                    activeDiary.whetherAppPpPresent === 'NO'
-                                      ? 'bg-indigo-650 text-white shadow-xs'
-                                      : 'text-gray-500 hover:text-gray-800'
-                                  }`}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                  style={activeDiary.whetherAppPpPresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
                                 >
                                   NO
                                 </button>
                               </div>
                             </div>
                             <div>
-                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">Defence Counsel Present?</label>
-                              <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-205">
+                              <label className="block text-[10px] font-bold uppercase mb-1.5" style={{ color: 'var(--th-text3)' }}>Defence Counsel Present?</label>
+                              <div className="flex p-0.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                                 <button
                                   type="button"
                                   onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'YES')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                    activeDiary.whetherDefenceCounselPresent === 'YES'
-                                      ? 'bg-indigo-650 text-white shadow-xs'
-                                      : 'text-gray-500 hover:text-gray-800'
-                                  }`}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                  style={activeDiary.whetherDefenceCounselPresent === 'YES' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
                                 >
                                   YES
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'NO')}
-                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                    activeDiary.whetherDefenceCounselPresent === 'NO'
-                                      ? 'bg-indigo-650 text-white shadow-xs'
-                                      : 'text-gray-500 hover:text-gray-800'
-                                  }`}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer`}
+                                  style={activeDiary.whetherDefenceCounselPresent === 'NO' ? { background: 'var(--th-primary)', color: 'white' } : { color: 'var(--th-text4)' }}
                                 >
                                   NO
                                 </button>
@@ -2910,11 +2798,12 @@ export default function App() {
                       </div>
 
                       {/* Pinned Bottom Action Buttons */}
-                      <div className="flex flex-wrap items-center gap-2.5 shrink-0 justify-end pt-5 border-t border-gray-150 mt-5">
+                      <div className="flex flex-wrap items-center gap-2.5 shrink-0 justify-end pt-5 border-t mt-5" style={{ borderColor: 'var(--th-border)' }}>
                         {loadedDbId ? (
                           <button
                             onClick={handleUpdateDatabase}
-                            className="bg-indigo-650 hover:bg-indigo-755 text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                            className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                            style={{ background: 'var(--th-primary)' }}
                           >
                             <Save className="w-3.5 h-3.5" />
                             Sync Updates to DB
@@ -2922,7 +2811,8 @@ export default function App() {
                         ) : (
                           <button
                             onClick={handleSaveToDatabase}
-                            className="bg-indigo-650 hover:bg-indigo-755 text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                            className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                            style={{ background: 'var(--th-primary)' }}
                           >
                             <Save className="w-3.5 h-3.5" />
                             Save to Database
@@ -2971,26 +2861,26 @@ export default function App() {
                     </div>
                   ) : (
                     /* WORKSPACE PLACEHOLDER */
-                    <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center min-h-[600px] my-auto">
-                      <div className="w-16 h-16 bg-gray-50 text-gray-300 rounded-2xl flex items-center justify-center mb-4 border border-gray-100 shadow-xs">
-                        <FileCheck2 className="w-8 h-8 text-indigo-500 animate-pulse" />
+                    <div className="backdrop-blur-md border rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center min-h-[600px] my-auto" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
+                      <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 border shadow-xs" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                        <FileCheck2 className="w-8 h-8 animate-pulse" style={{ color: 'var(--th-primary)' }} />
                       </div>
-                      <h3 className="font-display font-bold text-gray-950 text-lg">Layout Preservation Document Workspace</h3>
-                      <p className="text-xs text-gray-400 mt-2 max-w-md leading-relaxed">
+                      <h3 className="font-display font-bold text-lg" style={{ color: 'var(--th-text)' }}>Layout Preservation Document Workspace</h3>
+                      <p className="text-xs mt-2 max-w-md leading-relaxed" style={{ color: 'var(--th-text3)' }}>
                         Transform scanned police case diaries into pristine editable Word forms. Adjust margins, add/remove accused rows, and generate formatted docx files.
                       </p>
                       
-                      <div className="mt-8 flex flex-col sm:flex-row gap-4 text-left max-w-lg bg-gray-55/50 border border-gray-100 p-5 rounded-2xl">
+                      <div className="mt-8 flex flex-col sm:flex-row gap-4 text-left max-w-lg p-5 rounded-2xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                         <div className="flex-1">
-                          <span className="text-xs font-semibold text-gray-800">1. Reconstruct Layout</span>
-                          <p className="text-[10px] text-gray-550 mt-1 leading-normal font-medium">
+                          <span className="text-xs font-semibold" style={{ color: 'var(--th-text2)' }}>1. Reconstruct Layout</span>
+                          <p className="text-[10px] mt-1 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>
                             Upload your Case Diary PDF in the <strong>Gateway Terminal</strong>. The system parses structural grids, accused lists, and remarks.
                           </p>
                         </div>
-                        <div className="w-px bg-gray-200 hidden sm:block"></div>
+                        <div className="w-px hidden sm:block" style={{ background: 'var(--th-border)' }}></div>
                         <div className="flex-1">
-                          <span className="text-xs font-semibold text-gray-800">2. Interactive Word Compilation</span>
-                          <p className="text-[10px] text-gray-550 mt-1 leading-normal font-medium">
+                          <span className="text-xs font-semibold" style={{ color: 'var(--th-text2)' }}>2. Interactive Word Compilation</span>
+                          <p className="text-[10px] mt-1 leading-normal font-medium" style={{ color: 'var(--th-text4)' }}>
                             Edit parameters right inside your browser workspace. Export high-fidelity Microsoft Word documents instantly.
                           </p>
                         </div>
@@ -3246,35 +3136,32 @@ export default function App() {
 
       {/* Mobile Bottom Navigation Bar */}
       {user && (
-        <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-gray-200/80 px-4 py-2 z-50 flex items-center justify-around shadow-lg">
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 backdrop-blur-xl border-t px-4 py-2 z-50 flex items-center justify-around shadow-lg" style={{ background: 'var(--th-header-bg)', borderColor: 'var(--th-header-border)' }}>
           <button
             onClick={() => setActiveTab('gateway')}
-            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer ${
-              activeTab === 'gateway' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
-            }`}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer`}
+            style={{ color: activeTab === 'gateway' ? 'var(--th-primary)' : 'var(--th-text4)' }}
           >
             <UploadCloud className="w-5 h-5" />
             Gateway
           </button>
           <button
             onClick={() => setActiveTab('records')}
-            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer relative ${
-              activeTab === 'records' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
-            }`}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer relative`}
+            style={{ color: activeTab === 'records' ? 'var(--th-primary)' : 'var(--th-text4)' }}
           >
             <FileText className="w-5 h-5" />
             Case Files
             {savedDatabases.length > 0 && (
-              <span className="absolute top-0 right-3 px-1 py-0.5 bg-indigo-650 text-white text-[7px] font-bold rounded-full leading-none">
+              <span className="absolute top-0 right-3 px-1 py-0.5 text-white text-[7px] font-bold rounded-full leading-none" style={{ background: 'var(--th-primary)' }}>
                 {savedDatabases.length}
               </span>
             )}
           </button>
           <button
             onClick={() => setActiveTab('editor')}
-            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer relative ${
-              activeTab === 'editor' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
-            }`}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer relative`}
+            style={{ color: activeTab === 'editor' ? 'var(--th-primary)' : 'var(--th-text4)' }}
           >
             <Edit3 className="w-5 h-5" />
             Workspace
@@ -3286,9 +3173,8 @@ export default function App() {
           </button>
           <button
             onClick={() => setActiveTab('dashboard')}
-            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer ${
-              activeTab === 'dashboard' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
-            }`}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer`}
+            style={{ color: activeTab === 'dashboard' ? 'var(--th-primary)' : 'var(--th-text4)' }}
           >
             <Shield className="w-5 h-5" />
             Dashboard
@@ -3297,7 +3183,7 @@ export default function App() {
       )}
 
       {/* Footer bar */}
-      <footer className="border-t border-gray-200 bg-white py-6 px-6 text-center text-[10px] text-gray-400 font-medium z-10 relative">
+      <footer className="border-t py-6 px-6 text-center text-[10px] font-medium z-10 relative" style={{ borderColor: 'var(--th-border)', background: 'var(--th-header-bg)', color: 'var(--th-text4)' }}>
         <p>DocuForge Case Diary Reconstruction Workspace • Powered securely by Google Cloud Platform & Gemini</p>
       </footer>
     </div>

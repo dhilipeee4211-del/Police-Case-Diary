@@ -7,7 +7,9 @@
   --animate-float-slow: float-slow 22s ease-in-out infinite;
   --animate-float-reverse: float-reverse 26s ease-in-out infinite;
   --animate-pulse-ripple: pulse-ripple 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  
+  --animate-glow-pulse: glow-pulse 2.5s ease-in-out infinite;
+  --animate-theme-spin: theme-spin 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+
   @keyframes float-slow {
     0%, 100% { transform: translate(0px, 0px) scale(1); }
     33% { transform: translate(30px, -50px) scale(1.1); }
@@ -23,41 +25,273 @@
     70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
     100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
   }
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 12px 2px rgba(14, 165, 233, 0.35); }
+    50% { box-shadow: 0 0 24px 6px rgba(14, 165, 233, 0.6); }
+  }
+  @keyframes theme-spin {
+    0% { transform: rotate(0deg) scale(0.8); opacity: 0; }
+    100% { transform: rotate(360deg) scale(1); opacity: 1; }
+  }
+}
+
+/* ============================================
+   LIGHT THEME (Sky Blue) — Default :root vars
+   ============================================ */
+:root {
+  /* Primary palette */
+  --th-primary: #0ea5e9;
+  --th-primary-dark: #0284c7;
+  --th-primary-light: #bae6fd;
+  --th-primary-xlight: #e0f2fe;
+  --th-accent: #38bdf8;
+  --th-accent2: #7dd3fc;
+
+  /* Backgrounds */
+  --th-bg: #f0f9ff;
+  --th-bg2: #e0f2fe;
+  --th-surface: #ffffff;
+  --th-surface2: #f8fafc;
+  --th-surface3: rgba(255,255,255,0.82);
+
+  /* Text */
+  --th-text: #0f172a;
+  --th-text2: #334155;
+  --th-text3: #64748b;
+  --th-text4: #94a3b8;
+
+  /* Borders */
+  --th-border: #bae6fd;
+  --th-border2: #e0f2fe;
+  --th-border3: rgba(186, 230, 253, 0.5);
+
+  /* Header */
+  --th-header-bg: rgba(240, 249, 255, 0.88);
+  --th-header-border: rgba(186, 230, 253, 0.7);
+
+  /* Cards */
+  --th-card-bg: rgba(255, 255, 255, 0.88);
+  --th-card-border: rgba(186, 230, 253, 0.6);
+  --th-card-shadow: 0 4px 24px rgba(14, 165, 233, 0.06);
+
+  /* Tabs */
+  --th-tab-active-bg: #e0f2fe;
+  --th-tab-active-text: #0369a1;
+  --th-tab-inactive-text: #64748b;
+
+  /* Inputs */
+  --th-input-bg: rgba(255,255,255,0.7);
+  --th-input-focus-bg: rgba(255,255,255,0.98);
+  --th-input-border: #bae6fd;
+  --th-input-focus-border: #0ea5e9;
+  --th-input-focus-ring: rgba(14, 165, 233, 0.15);
+  --th-input-label: #64748b;
+  --th-input-label-focus: #0284c7;
+
+  /* Ambient blobs */
+  --th-blob1: rgba(186, 230, 253, 0.4);
+  --th-blob2: rgba(125, 211, 252, 0.3);
+
+  /* Status colors */
+  --th-success: #16a34a;
+  --th-success-bg: #f0fdf4;
+  --th-success-border: #bbf7d0;
+  --th-error: #dc2626;
+  --th-error-bg: #fef2f2;
+  --th-error-border: #fecaca;
+}
+
+/* ============================================
+   DARK THEME (Deep Navy) — .dark overrides
+   ============================================ */
+.dark {
+  /* Primary palette */
+  --th-primary: #38bdf8;
+  --th-primary-dark: #7dd3fc;
+  --th-primary-light: #0c4a6e;
+  --th-primary-xlight: #082f49;
+  --th-accent: #0ea5e9;
+  --th-accent2: #0284c7;
+
+  /* Backgrounds */
+  --th-bg: #050d1a;
+  --th-bg2: #0a1628;
+  --th-surface: #0f1e30;
+  --th-surface2: #0a1628;
+  --th-surface3: rgba(15, 30, 48, 0.92);
+
+  /* Text */
+  --th-text: #e2e8f0;
+  --th-text2: #cbd5e1;
+  --th-text3: #94a3b8;
+  --th-text4: #64748b;
+
+  /* Borders */
+  --th-border: #1e3a5f;
+  --th-border2: #0c2a4a;
+  --th-border3: rgba(30, 58, 95, 0.6);
+
+  /* Header */
+  --th-header-bg: rgba(5, 13, 26, 0.92);
+  --th-header-border: rgba(30, 58, 95, 0.8);
+
+  /* Cards */
+  --th-card-bg: rgba(15, 30, 48, 0.95);
+  --th-card-border: rgba(30, 58, 95, 0.8);
+  --th-card-shadow: 0 4px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(56, 189, 248, 0.05);
+
+  /* Tabs */
+  --th-tab-active-bg: rgba(56, 189, 248, 0.12);
+  --th-tab-active-text: #38bdf8;
+  --th-tab-inactive-text: #64748b;
+
+  /* Inputs */
+  --th-input-bg: rgba(15, 30, 48, 0.8);
+  --th-input-focus-bg: rgba(15, 30, 48, 0.98);
+  --th-input-border: #1e3a5f;
+  --th-input-focus-border: #38bdf8;
+  --th-input-focus-ring: rgba(56, 189, 248, 0.12);
+  --th-input-label: #64748b;
+  --th-input-label-focus: #7dd3fc;
+
+  /* Ambient blobs */
+  --th-blob1: rgba(14, 165, 233, 0.08);
+  --th-blob2: rgba(56, 189, 248, 0.06);
+
+  /* Status colors */
+  --th-success: #4ade80;
+  --th-success-bg: rgba(74, 222, 128, 0.08);
+  --th-success-border: rgba(74, 222, 128, 0.2);
+  --th-error: #f87171;
+  --th-error-bg: rgba(248, 113, 113, 0.08);
+  --th-error-border: rgba(248, 113, 113, 0.2);
+}
+
+/* ============================================
+   BASE STYLES
+   ============================================ */
+*, *::before, *::after {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+  transition-duration: 200ms;
+  transition-timing-function: ease;
 }
 
 body {
   font-family: var(--font-sans);
-  background-color: #fcfcfd;
-  color: #1f2937;
+  background-color: var(--th-bg);
+  color: var(--th-text);
 }
 
-/* Custom styles for animations and file upload hover states */
-.drag-active {
-  border-color: #3b82f6;
-  background-color: #eff6ff;
-}
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
 
+/* Glass panels */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: var(--th-surface3);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--th-border);
 }
 
 .glass-panel-dark {
-  background: rgba(15, 23, 42, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(5, 13, 26, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(30, 58, 95, 0.8);
+}
+
+/* Theme card */
+.th-card {
+  background: var(--th-card-bg);
+  border: 1px solid var(--th-card-border);
+  box-shadow: var(--th-card-shadow);
+}
+
+/* Theme button - primary */
+.th-btn-primary {
+  background: linear-gradient(135deg, var(--th-primary), var(--th-primary-dark));
+  color: #fff;
+  font-weight: 700;
+  transition: all 0.2s ease;
+}
+.th-btn-primary:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 4px 16px rgba(14, 165, 233, 0.35);
+}
+
+/* Theme input */
+.th-input {
+  background: var(--th-input-bg);
+  border: 1px solid var(--th-input-border);
+  color: var(--th-text);
+}
+.th-input:focus {
+  background: var(--th-input-focus-bg);
+  border-color: var(--th-input-focus-border);
+  box-shadow: 0 0 0 3px var(--th-input-focus-ring);
+  outline: none;
+}
+
+/* Theme toggle pill */
+.theme-toggle-pill {
+  display: flex;
+  align-items: center;
+  background: var(--th-surface2);
+  border: 1px solid var(--th-border);
+  border-radius: 9999px;
+  padding: 3px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  gap: 2px;
+}
+.theme-toggle-pill:hover {
+  border-color: var(--th-primary);
+  box-shadow: 0 0 0 3px var(--th-input-focus-ring);
+}
+.theme-toggle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.theme-toggle-icon.active {
+  background: var(--th-primary);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.4);
+}
+.theme-toggle-icon.inactive {
+  color: var(--th-text4);
+}
+
+/* Drag active */
+.drag-active {
+  border-color: var(--th-primary);
+  background-color: var(--th-primary-xlight);
+}
+
+/* Ambient blobs */
+.amb-blob-1 { background: var(--th-blob1); }
+.amb-blob-2 { background: var(--th-blob2); }
+
+/* Dark mode glow effect for active elements */
+.dark .glow-primary {
+  animation: var(--animate-glow-pulse);
 }
 
 @keyframes shimmer {
-  0% {
-    background-position: 0 0;
-  }
-  100% {
-    background-position: 1rem 0;
-  }
+  0% { background-position: 0 0; }
+  100% { background-position: 1rem 0; }
 }
 
+/* Scrollbar theming */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--th-surface2); }
+::-webkit-scrollbar-thumb { background: var(--th-border); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--th-primary); }
 
+/* Selection theming */
+::selection { background: var(--th-primary-light); color: var(--th-primary-dark); }
