@@ -342,6 +342,7 @@ export default function App() {
 
   // Admin Access Panel States
   const [adminAccessMap, setAdminAccessMap] = useState<Record<string, string[]>>({});
+  const [adminGrantEmails, setAdminGrantEmails] = useState<string>('');
   const [adminTargetEmail, setAdminTargetEmail] = useState<string>('');
   const [adminSelectedDbId, setAdminSelectedDbId] = useState<string>('');
   const [isUpdatingAccess, setIsUpdatingAccess] = useState<boolean>(false);
@@ -908,6 +909,48 @@ export default function App() {
     } finally {
       setIsUpdatingAccess(false);
     }
+  };
+
+  const handleGrantMultipleAccess = async () => {
+    if (!adminGrantEmails.trim() || !adminSelectedDbId) {
+      alert('Please enter at least one email and select a database.');
+      return;
+    }
+    const emails = adminGrantEmails
+      .split(/[,;\n]+/)
+      .map(e => e.trim().toLowerCase())
+      .filter(e => e.length > 0 && e.includes('@'));
+    if (emails.length === 0) {
+      alert('No valid emails found. Separate multiple emails with commas.');
+      return;
+    }
+    setIsUpdatingAccess(true);
+    let successCount = 0;
+    for (const email of emails) {
+      try {
+        const response = await fetch('/api/db/access', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requesterEmail: user!.email,
+            targetEmail: email,
+            dbId: adminSelectedDbId,
+            action: 'grant'
+          })
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            setAdminAccessMap(data.accessMap || {});
+            successCount++;
+          }
+        }
+      } catch (_) {}
+    }
+    setIsUpdatingAccess(false);
+    setAdminGrantEmails('');
+    setAdminSelectedDbId('');
+    alert(`Access granted to ${successCount} of ${emails.length} email(s).`);
   };
 
   // Debounced Auto-Save back to Local / Server / Cloud Database when editing an active session
@@ -2240,7 +2283,7 @@ export default function App() {
                       )}
                     </span>
                   ),
-                  dashboard: roleInfo.level === 'admin' ? 'SP Control Center' : 'System Dashboard'
+                  dashboard: 'Admin'
                 };
                 const icons: Record<string, React.ReactNode> = {
                   gateway: <UploadCloud className="w-4 h-4" />,
@@ -4050,107 +4093,120 @@ export default function App() {
                     </div>
 
                     {user?.email === 'dhilipeee4211@gmail.com' && (
-                      <div className="mt-8 p-6 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
-                        <div className="flex items-center gap-2 mb-4 pb-2 border-b border-gray-200">
-                          <Lock className="w-5 h-5 text-indigo-650" />
-                          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
-                            Database Access Permissions Manager (Admin)
-                          </h4>
-                        </div>
-                        
-                        {/* Grant Access form */}
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end bg-white p-4 rounded-xl border border-gray-200/60 shadow-xs mb-6">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
-                              User Email
-                            </label>
-                            <input
-                              type="email"
-                              placeholder="e.g. dhileepank2@gmail.com"
-                              value={adminTargetEmail}
-                              onChange={(e) => setAdminTargetEmail(e.target.value)}
-                              className="w-full px-3 py-2 bg-gray-50/50 focus:bg-white border border-gray-200 focus:border-indigo-500 focus:outline-none rounded-xl text-xs font-semibold text-gray-900 shadow-sm transition-all"
-                            />
+                      <div
+                        className="mt-6 p-6 border rounded-2xl shadow-sm"
+                        style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+                      >
+                        <div className="flex items-center gap-2 mb-5">
+                          <div className="p-2 rounded-xl" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
+                            <Lock className="w-4 h-4" />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
-                              Select Database
-                            </label>
-                            <select
-                              value={adminSelectedDbId}
-                              onChange={(e) => setAdminSelectedDbId(e.target.value)}
-                              className="w-full px-3 py-2 bg-gray-50/50 focus:bg-white border border-gray-200 focus:border-indigo-500 focus:outline-none rounded-xl text-xs font-bold text-gray-700 shadow-sm transition-all cursor-pointer"
-                            >
-                              <option value="">-- Choose Database --</option>
-                              {savedDatabases.map((db) => (
-                                <option key={db.id} value={db.id}>
-                                  {db.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <button
-                              onClick={() => handleUpdateAccess(adminTargetEmail, adminSelectedDbId, 'grant')}
-                              disabled={isUpdatingAccess || !adminTargetEmail || !adminSelectedDbId}
-                              className="w-full bg-indigo-650 hover:bg-indigo-755 disabled:bg-gray-100 disabled:text-gray-400 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer z-10"
-                            >
-                              {isUpdatingAccess ? (
-                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Plus className="w-3.5 h-3.5" />
-                              )}
-                              Grant Access
-                            </button>
+                            <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>Database Access Manager</h4>
+                            <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Grant or revoke database access for one or multiple users</p>
                           </div>
                         </div>
 
-                        {/* Assignments List */}
-                        <div className="space-y-3">
-                          <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider">
-                            Active Share Permissions
-                          </span>
-                          
-                          {Object.keys(adminAccessMap).length === 0 || (Object.values(adminAccessMap) as string[][]).every(list => list.length === 0) ? (
-                            <p className="text-xs text-gray-400 font-medium italic bg-white py-4 text-center rounded-xl border border-gray-200/50">
-                              No sharing permissions assigned. Use the form above to grant access.
-                            </p>
+                        {/* Grant Access Form */}
+                        <div
+                          className="grid grid-cols-1 gap-4 p-4 rounded-xl mb-5 border"
+                          style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}
+                        >
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* Multi-email input */}
+                            <div>
+                              <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--th-text3)' }}>
+                                User Emails <span className="normal-case font-normal">(comma-separated for multiple)</span>
+                              </label>
+                              <textarea
+                                rows={2}
+                                placeholder={"e.g. user1@gmail.com, user2@gmail.com"}
+                                value={adminGrantEmails}
+                                onChange={(e) => setAdminGrantEmails(e.target.value)}
+                                className="w-full px-3 py-2 border rounded-xl text-xs font-semibold focus:outline-none transition-all resize-none shadow-xs"
+                                style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                              />
+                            </div>
+                            {/* Database selector */}
+                            <div>
+                              <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--th-text3)' }}>
+                                Select Database
+                              </label>
+                              <select
+                                value={adminSelectedDbId}
+                                onChange={(e) => setAdminSelectedDbId(e.target.value)}
+                                className="w-full px-3 py-2 border rounded-xl text-xs font-bold focus:outline-none transition-all cursor-pointer shadow-xs"
+                                style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                              >
+                                <option value="">-- Choose Database --</option>
+                                {savedDatabases.map((db) => (
+                                  <option key={db.id} value={db.id}>{db.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                          <button
+                            onClick={handleGrantMultipleAccess}
+                            disabled={isUpdatingAccess || !adminGrantEmails.trim() || !adminSelectedDbId}
+                            className="w-full text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+                            style={{ background: 'var(--th-primary)' }}
+                          >
+                            {isUpdatingAccess ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Plus className="w-3.5 h-3.5" />
+                            )}
+                            Grant Access to All Listed Emails
+                          </button>
+                        </div>
+
+                        {/* Current Access — Grouped by Database */}
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider mb-3" style={{ color: 'var(--th-text3)' }}>Current Access — Grouped by Database</p>
+                          {savedDatabases.length === 0 ? (
+                            <p className="text-xs italic text-center py-4" style={{ color: 'var(--th-text4)' }}>No databases found.</p>
                           ) : (
-                            <div className="grid grid-cols-1 gap-3 max-h-[300px] overflow-y-auto pr-1">
-                              {(Object.entries(adminAccessMap) as [string, string[]][]).map(([email, dbIds]) => {
-                                if (!dbIds || dbIds.length === 0) return null;
+                            <div className="flex flex-col gap-3 max-h-[360px] overflow-y-auto pr-1">
+                              {savedDatabases.map((db) => {
+                                // Collect all emails that have access to this DB
+                                const usersWithAccess = (Object.entries(adminAccessMap) as [string, string[]][]).filter(
+                                  ([, dbIds]) => dbIds.includes(db.id)
+                                ).map(([email]) => email);
                                 return (
                                   <div
-                                    key={email}
-                                    className="bg-white p-3.5 rounded-xl border border-gray-200/70 shadow-2xs flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                                    key={db.id}
+                                    className="p-4 rounded-xl border"
+                                    style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)' }}
                                   >
-                                    <div className="flex-1 min-w-0">
-                                      <span className="text-xs font-bold text-indigo-950 font-mono">
-                                        {email}
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Database className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--th-primary)' }} />
+                                      <span className="text-xs font-bold truncate" style={{ color: 'var(--th-text)' }}>{db.name}</span>
+                                      <span className="ml-auto text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
+                                        {usersWithAccess.length} user{usersWithAccess.length !== 1 ? 's' : ''}
                                       </span>
-                                      <div className="flex flex-wrap gap-1.5 mt-1.5">
-                                        {dbIds.map((dbId) => {
-                                          const db = savedDatabases.find((d) => d.id === dbId);
-                                          return (
-                                            <span
-                                              key={dbId}
-                                              className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-indigo-50/70 text-indigo-700 text-[10px] font-bold rounded-lg border border-indigo-100"
-                                            >
-                                              <Database className="w-2.5 h-2.5 shrink-0" />
-                                              {db ? db.name : `DB ID: ${dbId}`}
-                                              
-                                              <button
-                                                onClick={() => handleUpdateAccess(email, dbId, 'revoke')}
-                                                className="ml-1 text-red-400 hover:text-red-600 font-bold hover:bg-red-50 p-0.5 rounded cursor-pointer z-10"
-                                                title="Revoke access"
-                                              >
-                                                ✕
-                                              </button>
-                                            </span>
-                                          );
-                                        })}
-                                      </div>
                                     </div>
+                                    {usersWithAccess.length === 0 ? (
+                                      <p className="text-[10px] italic" style={{ color: 'var(--th-text4)' }}>No users have access to this database yet.</p>
+                                    ) : (
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {usersWithAccess.map((email) => (
+                                          <span
+                                            key={email}
+                                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold border"
+                                            style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}
+                                          >
+                                            {email}
+                                            <button
+                                              onClick={() => handleUpdateAccess(email, db.id, 'revoke')}
+                                              className="text-red-400 hover:text-red-600 font-bold ml-0.5 cursor-pointer"
+                                              title={`Revoke ${email}'s access to ${db.name}`}
+                                            >
+                                              ✕
+                                            </button>
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -4223,7 +4279,7 @@ export default function App() {
             style={{ color: activeTab === 'dashboard' ? 'var(--th-primary)' : 'var(--th-text4)' }}
           >
             <Shield className="w-5 h-5" />
-            Dashboard
+            Admin
           </button>
         </div>
       )}
