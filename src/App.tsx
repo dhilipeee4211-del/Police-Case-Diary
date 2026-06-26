@@ -688,7 +688,7 @@ export default function App() {
         const parts = extractedText.split(/--- PAGE \d+(?: \(SCANNED OCR\))? ---/);
         const pages = parts.slice(1).map(p => p.trim());
         
-        const chunkSize = 10;
+        const chunkSize = 5;
         const chunks: string[] = [];
         for (let i = 0; i < pages.length; i += chunkSize) {
           const chunkPages = pages.slice(i, i + chunkSize);
@@ -770,6 +770,12 @@ export default function App() {
             }
           } else {
             throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
+          }
+
+          // Add pacing delay to prevent hitting Gemini's 15 RPM free tier rate limit
+          if (cIdx < chunks.length - 1) {
+            addLocalLog(`Pacing request flow... Waiting 2.5s before next batch...`, 'SYSTEM');
+            await new Promise(resolve => setTimeout(resolve, 2500));
           }
         }
         
