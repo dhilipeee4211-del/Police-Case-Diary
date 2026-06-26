@@ -52,6 +52,103 @@ import { CaseDiary, Accused, SavedDatabase } from './types';
 import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase } from './dbHelper';
 import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
 
+// Helper functions for IndexedDB storage to bypass localStorage 5MB quota limit on large datasets/PDF chunks
+function saveToIndexedDB(key: string, value: any): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.open('GatewayRecoveryDB', 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('states')) {
+          db.createObjectStore('states');
+        }
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction('states', 'readwrite');
+        const store = transaction.objectStore('states');
+        store.put(value, key);
+        transaction.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        transaction.onerror = () => {
+          db.close();
+          resolve();
+        };
+      };
+      request.onerror = () => {
+        resolve();
+      };
+    } catch (e) {
+      console.warn("IndexedDB save failed:", e);
+      resolve();
+    }
+  });
+}
+
+function getFromIndexedDB(key: string): Promise<any> {
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.open('GatewayRecoveryDB', 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('states')) {
+          db.createObjectStore('states');
+        }
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction('states', 'readonly');
+        const store = transaction.objectStore('states');
+        const getReq = store.get(key);
+        getReq.onsuccess = () => {
+          db.close();
+          resolve(getReq.result);
+        };
+        getReq.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+      };
+      request.onerror = () => {
+        resolve(null);
+      };
+    } catch (e) {
+      console.warn("IndexedDB read failed:", e);
+      resolve(null);
+    }
+  });
+}
+
+function removeFromIndexedDB(key: string): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.open('GatewayRecoveryDB', 1);
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction('states', 'readwrite');
+        const store = transaction.objectStore('states');
+        store.delete(key);
+        transaction.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        transaction.onerror = () => {
+          db.close();
+          resolve();
+        };
+      };
+      request.onerror = () => {
+        resolve();
+      };
+    } catch (e) {
+      console.warn("IndexedDB delete failed:", e);
+      resolve();
+    }
+  });
+}
+
 const ALLOWED_EMAILS = [
   'dhilipeee4211@gmail.com',
   'dhileepank2@gmail.com',
@@ -333,22 +430,20 @@ export default function App() {
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    try {
-      const savedQueue = localStorage.getItem('gateway_extraction_queue');
-      if (savedQueue) {
-        const parsed = JSON.parse(savedQueue);
+    getFromIndexedDB('gateway_extraction_queue')
+      .then((parsed) => {
         if (parsed && parsed.chunks && parsed.nextIndex < parsed.chunks.length) {
           setRecoveryQueue(parsed);
         }
-      }
-    } catch (err) {
-      console.warn("Failed to read recovery queue on mount:", err);
-    }
+      })
+      .catch((err) => {
+        console.warn("Failed to read recovery queue on mount from IndexedDB:", err);
+      });
   }, []);
 
   const handleDismissRecovery = () => {
-    localStorage.removeItem('gateway_extracted_diaries');
-    localStorage.removeItem('gateway_extraction_queue');
+    removeFromIndexedDB('gateway_extracted_diaries');
+    removeFromIndexedDB('gateway_extraction_queue');
     setRecoveryQueue(null);
   };
 
@@ -357,9 +452,9 @@ export default function App() {
     
     let savedDiaries: CaseDiary[] = [];
     try {
-      const json = localStorage.getItem('gateway_extracted_diaries');
-      if (json) {
-        savedDiaries = JSON.parse(json);
+      const cached = await getFromIndexedDB('gateway_extracted_diaries');
+      if (cached) {
+        savedDiaries = cached;
       }
     } catch (err) {
       console.warn("Failed to load cached diaries on resume:", err);
@@ -1293,12 +1388,12 @@ export default function App() {
     let accumulatedDiaries: CaseDiary[] = [];
     if (nextIndex > 0) {
       try {
-        const cached = localStorage.getItem('gateway_extracted_diaries');
+        const cached = await getFromIndexedDB('gateway_extracted_diaries');
         if (cached) {
-          accumulatedDiaries = JSON.parse(cached);
+          accumulatedDiaries = cached;
         }
       } catch (e) {
-        console.warn("Failed to load cached diaries from localStorage", e);
+        console.warn("Failed to load cached diaries from IndexedDB", e);
       }
     }
 
@@ -1444,8 +1539,8 @@ export default function App() {
           appendChunkDiaries(chunkResult.data);
           addLocalLog(`Successfully structured batch ${cIdx + 1} of ${chunks.length}.`, 'SUCCESS');
 
-          // Cache current extraction state in LocalStorage for sudden disconnect recovery
-          localStorage.setItem('gateway_extracted_diaries', JSON.stringify(accumulatedDiaries));
+          // Cache current extraction state in IndexedDB for sudden disconnect recovery
+          await saveToIndexedDB('gateway_extracted_diaries', accumulatedDiaries);
           const updatedQueueState = {
             chunks,
             mode,
@@ -1456,7 +1551,7 @@ export default function App() {
             gatewayDbName: dbName,
             gatewayDbId: activeDbId
           };
-          localStorage.setItem('gateway_extraction_queue', JSON.stringify(updatedQueueState));
+          await saveToIndexedDB('gateway_extraction_queue', updatedQueueState);
 
           // Auto-save parsed results to database in the background as they are fetched
           if (user) {
@@ -1472,9 +1567,9 @@ export default function App() {
                 return [saved, ...filtered];
               });
               
-              // Re-save queue to local storage to record the persistent database ID
+              // Re-save queue to IndexedDB to record the persistent database ID
               updatedQueueState.gatewayDbId = saved.id;
-              localStorage.setItem('gateway_extraction_queue', JSON.stringify(updatedQueueState));
+              await saveToIndexedDB('gateway_extraction_queue', updatedQueueState);
               addLocalLog(`Cloud Auto-save successful (DB ID: ${saved.id}).`, 'SUCCESS');
             } catch (dbErr: any) {
               console.error("Cloud Auto-save failed:", dbErr);
@@ -1495,9 +1590,9 @@ export default function App() {
       setExtractionStep('Reconstruction completed successfully!');
       addLocalLog('Pipeline complete. Rendering data schemas in Workspace...', 'SUCCESS');
       
-      // Clean up localStorage caches since pipeline is fully complete
-      localStorage.removeItem('gateway_extraction_queue');
-      localStorage.removeItem('gateway_extracted_diaries');
+      // Clean up IndexedDB caches since pipeline is fully complete
+      await removeFromIndexedDB('gateway_extraction_queue');
+      await removeFromIndexedDB('gateway_extracted_diaries');
       
       setCurrentExtractionQueue(null);
       setIsExtracting(false);
@@ -1536,8 +1631,8 @@ export default function App() {
     setExtractionLogs([]);
     setLastExtractedDiaries([]);
     setGatewayDbId(null);
-    localStorage.removeItem('gateway_extraction_queue');
-    localStorage.removeItem('gateway_extracted_diaries');
+    await removeFromIndexedDB('gateway_extraction_queue');
+    await removeFromIndexedDB('gateway_extracted_diaries');
 
     addLocalLog('Starting case diary reconstruction pipeline...', 'SYSTEM');
     addLocalLog(`Target file: "${selectedFile.name}" (${(selectedFile.size / 1024).toFixed(1)} KB)`, 'SYSTEM');
