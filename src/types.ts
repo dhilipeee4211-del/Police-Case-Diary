@@ -45,4 +45,5 @@ export interface SavedDatabase {
   createdAt: number;
   diaries?: CaseDiary[];
   diaryCount?: number;
+  synced?: boolean;
 }

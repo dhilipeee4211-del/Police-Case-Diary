@@ -3969,7 +3969,7 @@ export default function App() {
 
               {activeTab === 'dashboard' && (
                 <div className="max-w-4xl mx-auto w-full flex flex-col gap-6">
-                  {/* Officer Control Center Dashboard */}
+                  {/* Admin Control Center Dashboard */}
                   <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm border border-white/20">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-150">
                       <div className="flex items-center gap-3">
@@ -3977,7 +3977,7 @@ export default function App() {
                           <Shield className="w-6 h-6 animate-pulse" />
                         </div>
                         <div>
-                          <h3 className="font-display font-bold text-gray-955 text-base">Officer Control Center</h3>
+                          <h3 className="font-display font-bold text-gray-955 text-base">Admin Control Center</h3>
                           <p className="text-xs text-gray-400 font-medium">Verify credentials, database states, and background system health</p>
                         </div>
                       </div>

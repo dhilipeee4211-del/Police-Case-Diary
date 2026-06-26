@@ -29,16 +29,19 @@ export async function saveSavedDatabase(
   userId: string,
   existingDbId?: string
 ): Promise<SavedDatabase> {
+  const localDbs = getLocalDatabases(userId);
+  const existingLocal = localDbs.find(db => db.id === existingDbId);
+
   const newDb: SavedDatabase = {
     id: existingDbId || `db-${Date.now()}`,
     userId,
     name,
     createdAt: Date.now(),
     diaries,
+    synced: existingLocal ? existingLocal.synced : false,
   };
 
   // First, always update our client-side localStorage backup cache
-  const localDbs = getLocalDatabases(userId);
   const updatedLocal = localDbs.filter((db) => db.id !== newDb.id);
   updatedLocal.push(newDb);
   saveLocalDatabases(userId, updatedLocal);
@@ -50,7 +53,13 @@ export async function saveSavedDatabase(
       body: JSON.stringify(newDb),
     });
 
-    if (!response.ok) {
+    if (response.ok) {
+      // Mark as synced and re-save locally
+      newDb.synced = true;
+      const reLoadedDbs = getLocalDatabases(userId).filter((db) => db.id !== newDb.id);
+      reLoadedDbs.push(newDb);
+      saveLocalDatabases(userId, reLoadedDbs);
+    } else {
       console.warn(`Server-side database save failed (${response.status}), saved locally in browser instead.`);
     }
   } catch (err) {
@@ -73,19 +82,38 @@ export async function getSavedDatabases(userId: string, email?: string): Promise
     if (serverResponse.ok) {
       const result = await serverResponse.json();
       if (result.success && Array.isArray(result.databases)) {
-        const serverDbs: SavedDatabase[] = result.databases;
+        // Mark all databases loaded from the server as synced
+        const serverDbs: SavedDatabase[] = result.databases.map((db: any) => ({
+          ...db,
+          synced: true,
+        }));
         
-        // Merge server and local databases (prefer local if newer, keep unique IDs)
+        // Merge server and local databases
         const mergedMap = new Map<string, SavedDatabase>();
         
-        // Load server databases
+        // Load server databases first (these are guaranteed to exist on the server)
         serverDbs.forEach((db) => mergedMap.set(db.id, db));
         
-        // Load local databases (if some local changes are newer or not synced)
+        // Load local databases (check if some are unsynced or need update)
         localDbs.forEach((db) => {
           const existing = mergedMap.get(db.id);
-          if (!existing || db.createdAt > (existing.createdAt || 0)) {
+          if (!existing) {
+            // This database exists in local cache but is NOT on the server.
+            // Check if it was previously synced to the server.
+            // If it was previously synced or belongs to another user,
+            // it means it was deleted on the server. Discard it!
+            const isShared = db.userId !== userId;
+            if (db.synced || isShared) {
+              console.log(`Database ${db.id} ("${db.name}") was deleted on the server. Cleaning from local cache.`);
+              return; // Discard: do not add to mergedMap
+            }
+            // Otherwise, it was created offline and has never been synced, so we keep it.
             mergedMap.set(db.id, db);
+          } else {
+            // It exists on both. Prefer local if newer, but keep synced: true.
+            if (db.createdAt > (existing.createdAt || 0)) {
+              mergedMap.set(db.id, { ...db, synced: true });
+            }
           }
         });
 
@@ -149,7 +177,7 @@ export async function getSavedDatabaseById(id: string, userId: string, email?: s
     if (response.ok) {
       const result = await response.json();
       if (result.success && result.database) {
-        const fullDb: SavedDatabase = result.database;
+        const fullDb: SavedDatabase = { ...result.database, synced: true };
         
         // Cache the fully fetched database locally in browser
         const updatedLocal = localDbs.filter((db) => db.id !== fullDb.id);
