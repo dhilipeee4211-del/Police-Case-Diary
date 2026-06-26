@@ -81,7 +81,8 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
     const apiKeys = [
       process.env.GEMINI_API_KEY,
       process.env.GEMINI_API_KEY_2,
-      process.env.GEMINI_API_KEY_3
+      process.env.GEMINI_API_KEY_3,
+      process.env.GEMINI_API_KEY_4
     ].filter(Boolean) as string[];
 
     if (apiKeys.length === 0) {
@@ -354,7 +355,8 @@ app.post('/api/extract-text', async (req, res) => {
     const apiKeys = [
       process.env.GEMINI_API_KEY,
       process.env.GEMINI_API_KEY_2,
-      process.env.GEMINI_API_KEY_3
+      process.env.GEMINI_API_KEY_3,
+      process.env.GEMINI_API_KEY_4
     ].filter(Boolean) as string[];
 
     if (apiKeys.length === 0) {
