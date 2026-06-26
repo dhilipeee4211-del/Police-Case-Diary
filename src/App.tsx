@@ -40,7 +40,8 @@ import {
   Play,
   Pause,
   Sun,
-  Moon
+  Moon,
+  PackageOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initAuth, googleSignIn, logout } from './firebase';
@@ -377,6 +378,8 @@ export default function App() {
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isBulkExporting, setIsBulkExporting] = useState<boolean>(false);
+  const [bulkSearchQuery, setBulkSearchQuery] = useState<string>('');
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<string>>(new Set());
 
   // Saved Databases / History States
   const [savedDatabases, setSavedDatabases] = useState<SavedDatabase[]>([]);
@@ -533,7 +536,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Mobile active tab state
-  const [activeTab, setActiveTab] = useState<'gateway' | 'records' | 'editor' | 'dashboard'>('gateway');
+  const [activeTab, setActiveTab] = useState<'gateway' | 'records' | 'editor' | 'dashboard' | 'bulkexport'>('gateway');
 
   // Tamil/English Voice Typing States
   const [listeningField, setListeningField] = useState<keyof CaseDiary | null>(null);
@@ -3604,6 +3607,209 @@ export default function App() {
                 </div>
               )}
 
+              {activeTab === 'bulkexport' && (
+                <div className="w-full flex flex-col gap-5 animate-fade-in">
+                  {/* Bulk Export Header */}
+                  <div
+                    className="backdrop-blur-md border rounded-3xl p-5 shadow-sm"
+                    style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 rounded-xl" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
+                          <PackageOpen className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h3 className="font-display font-bold text-sm" style={{ color: 'var(--th-text)' }}>Bulk Export</h3>
+                          <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>
+                            {bulkSelectedIds.size > 0 ? `${bulkSelectedIds.size} of ${diaries.length} cases selected` : `${diaries.length} case ${diaries.length === 1 ? 'diary' : 'diaries'} in workspace`}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Export Action Buttons */}
+                      <div className="flex flex-wrap gap-2 shrink-0">
+                        <button
+                          onClick={async () => {
+                            const selected = diaries.filter(d => bulkSelectedIds.has(d.id));
+                            if (selected.length === 0) { alert('Please select at least one case diary to export.'); return; }
+                            setIsBulkExporting(true);
+                            try {
+                              await handleDownloadAllDocx(selected, `Bulk_Combined_Cases_${Date.now()}`);
+                            } finally { setIsBulkExporting(false); }
+                          }}
+                          disabled={isBulkExporting || bulkSelectedIds.size === 0}
+                          className="text-white text-xs font-bold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm hover:shadow transition-all disabled:opacity-40"
+                          style={{ background: 'var(--th-primary)' }}
+                          title="Export selected cases as a single combined Word document"
+                        >
+                          <FileDown className="w-3.5 h-3.5" />
+                          Combined Word ({bulkSelectedIds.size})
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            const selected = diaries.filter(d => bulkSelectedIds.has(d.id));
+                            if (selected.length === 0) { alert('Please select at least one case diary to export.'); return; }
+                            setIsBulkExporting(true);
+                            try {
+                              const blob = await exportDiariesToZip(selected);
+                              const url = URL.createObjectURL(blob);
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.download = `Bulk_Case_Diaries_ZIP_${Date.now()}.zip`;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              URL.revokeObjectURL(url);
+                            } catch (err: any) {
+                              alert(`ZIP export failed: ${err.message}`);
+                            } finally { setIsBulkExporting(false); }
+                          }}
+                          disabled={isBulkExporting || bulkSelectedIds.size === 0}
+                          className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-40"
+                          title="Export selected cases as individual Word files in a ZIP archive"
+                        >
+                          <FileDown className="w-3.5 h-3.5 text-gray-400" />
+                          {isBulkExporting ? 'Exporting...' : `ZIP Archive (${bulkSelectedIds.size})`}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Search + Select All / Deselect All */}
+                    <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--th-text4)' }} />
+                        <input
+                          type="text"
+                          placeholder="Search cases by CR No, station, district or date..."
+                          value={bulkSearchQuery}
+                          onChange={(e) => setBulkSearchQuery(e.target.value)}
+                          className="w-full pl-9 pr-3.5 py-2 border rounded-xl text-xs font-semibold focus:outline-none transition-all shadow-xs"
+                          style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                        />
+                      </div>
+
+                      <div className="flex gap-2 shrink-0">
+                        <button
+                          onClick={() => {
+                            const filtered = diaries.filter(d => {
+                              const q = bulkSearchQuery.toLowerCase().trim();
+                              if (!q) return true;
+                              return (d.crNoAndSecOfLaw || '').toLowerCase().includes(q) ||
+                                (d.policeStation || '').toLowerCase().includes(q) ||
+                                (d.district || '').toLowerCase().includes(q) ||
+                                (d.dateOfCd || '').toLowerCase().includes(q);
+                            });
+                            setBulkSelectedIds(prev => {
+                              const next = new Set(prev);
+                              filtered.forEach(d => next.add(d.id));
+                              return next;
+                            });
+                          }}
+                          className="text-xs font-bold px-3 py-2 rounded-xl border cursor-pointer transition-all"
+                          style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}
+                        >
+                          Select All
+                        </button>
+                        <button
+                          onClick={() => setBulkSelectedIds(new Set())}
+                          className="text-xs font-bold px-3 py-2 rounded-xl border cursor-pointer transition-all"
+                          style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}
+                        >
+                          Deselect All
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Case Diary Checklist */}
+                  {diaries.length === 0 ? (
+                    <div
+                      className="backdrop-blur-md border rounded-3xl p-10 shadow-sm flex flex-col items-center justify-center text-center"
+                      style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+                    >
+                      <PackageOpen className="w-10 h-10 mb-3 opacity-30" style={{ color: 'var(--th-text3)' }} />
+                      <p className="text-sm font-semibold" style={{ color: 'var(--th-text3)' }}>No case diaries in workspace</p>
+                      <p className="text-xs mt-1" style={{ color: 'var(--th-text4)' }}>Load cases via Gateway or Case Files tab first.</p>
+                    </div>
+                  ) : (
+                    <div
+                      className="backdrop-blur-md border rounded-3xl p-4 shadow-sm flex flex-col gap-2"
+                      style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+                    >
+                      {diaries
+                        .filter(d => {
+                          const q = bulkSearchQuery.toLowerCase().trim();
+                          if (!q) return true;
+                          return (d.crNoAndSecOfLaw || '').toLowerCase().includes(q) ||
+                            (d.policeStation || '').toLowerCase().includes(q) ||
+                            (d.district || '').toLowerCase().includes(q) ||
+                            (d.dateOfCd || '').toLowerCase().includes(q);
+                        })
+                        .map((diary) => {
+                          const isChecked = bulkSelectedIds.has(diary.id);
+                          return (
+                            <label
+                              key={diary.id}
+                              htmlFor={`bulk-chk-${diary.id}`}
+                              className="flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all select-none"
+                              style={isChecked ? {
+                                background: 'var(--th-primary-xlight)',
+                                borderColor: 'var(--th-primary)',
+                              } : {
+                                background: 'var(--th-surface)',
+                                borderColor: 'var(--th-border)',
+                              }}
+                            >
+                              <input
+                                id={`bulk-chk-${diary.id}`}
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => {
+                                  setBulkSelectedIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(diary.id)) next.delete(diary.id);
+                                    else next.add(diary.id);
+                                    return next;
+                                  });
+                                }}
+                                className="w-4 h-4 rounded shrink-0 accent-[var(--th-primary)] cursor-pointer"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold truncate" style={{ color: 'var(--th-text)' }}>
+                                  {diary.crNoAndSecOfLaw || 'Untitled Case'}
+                                </p>
+                                <p className="text-[10px] font-medium truncate" style={{ color: 'var(--th-text3)' }}>
+                                  {diary.dateOfCd || '—'} • {diary.policeStation || 'Unknown Station'} • {diary.district || 'Unknown District'}
+                                </p>
+                              </div>
+                              {diary.dbId && (
+                                <span
+                                  className="text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0"
+                                  style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}
+                                >
+                                  DB
+                                </span>
+                              )}
+                            </label>
+                          );
+                        })}
+                      {diaries.filter(d => {
+                        const q = bulkSearchQuery.toLowerCase().trim();
+                        if (!q) return true;
+                        return (d.crNoAndSecOfLaw || '').toLowerCase().includes(q) ||
+                          (d.policeStation || '').toLowerCase().includes(q) ||
+                          (d.district || '').toLowerCase().includes(q) ||
+                          (d.dateOfCd || '').toLowerCase().includes(q);
+                      }).length === 0 && (
+                        <p className="text-xs text-center py-6 italic" style={{ color: 'var(--th-text4)' }}>No matching cases found.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {activeTab === 'dashboard' && (
                 <div className="max-w-4xl mx-auto w-full flex flex-col gap-6">
                   {/* Officer Control Center Dashboard */}
@@ -3881,6 +4087,19 @@ export default function App() {
             {diaries.length > 0 && (
               <span className="absolute top-0 right-3 px-1 py-0.5 bg-emerald-600 text-white text-[7px] font-bold rounded-full leading-none">
                 {diaries.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => { setActiveTab('bulkexport'); setBulkSelectedIds(new Set()); }}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer relative`}
+            style={{ color: activeTab === 'bulkexport' ? 'var(--th-primary)' : 'var(--th-text4)' }}
+          >
+            <PackageOpen className="w-5 h-5" />
+            Bulk Export
+            {bulkSelectedIds.size > 0 && (
+              <span className="absolute top-0 right-2 px-1 py-0.5 bg-emerald-600 text-white text-[7px] font-bold rounded-full leading-none">
+                {bulkSelectedIds.size}
               </span>
             )}
           </button>
