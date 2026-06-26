@@ -321,6 +321,65 @@ export default function App() {
 
   const [loadedDbId, setLoadedDbId] = useState<string | null>(null);
   const [loadedDbName, setLoadedDbName] = useState<string | null>(null);
+  const [gatewayDbId, setGatewayDbId] = useState<string | null>(null);
+  const [recoveryQueue, setRecoveryQueue] = useState<any | null>(null);
+
+  useEffect(() => {
+    try {
+      const savedQueue = localStorage.getItem('gateway_extraction_queue');
+      if (savedQueue) {
+        const parsed = JSON.parse(savedQueue);
+        if (parsed && parsed.chunks && parsed.nextIndex < parsed.chunks.length) {
+          setRecoveryQueue(parsed);
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to read recovery queue on mount:", err);
+    }
+  }, []);
+
+  const handleDismissRecovery = () => {
+    localStorage.removeItem('gateway_extracted_diaries');
+    localStorage.removeItem('gateway_extraction_queue');
+    setRecoveryQueue(null);
+  };
+
+  const handleResumeRecovery = async () => {
+    if (!recoveryQueue) return;
+    
+    let savedDiaries: CaseDiary[] = [];
+    try {
+      const json = localStorage.getItem('gateway_extracted_diaries');
+      if (json) {
+        savedDiaries = JSON.parse(json);
+      }
+    } catch (err) {
+      console.warn("Failed to load cached diaries on resume:", err);
+    }
+
+    setLastExtractedDiaries(savedDiaries);
+    setDiaries(savedDiaries);
+    setGatewayDbName(recoveryQueue.gatewayDbName || '');
+    setGatewayDbId(recoveryQueue.gatewayDbId || null);
+    
+    const dummyFile = new File([], recoveryQueue.filename, { type: 'application/pdf' });
+    setSelectedFile(dummyFile);
+    
+    const queueToProcess = {
+      chunks: recoveryQueue.chunks,
+      mode: recoveryQueue.mode,
+      filename: recoveryQueue.filename,
+      nextIndex: recoveryQueue.nextIndex,
+      chunkSize: recoveryQueue.chunkSize,
+      startPageOffset: recoveryQueue.startPageOffset,
+      gatewayDbName: recoveryQueue.gatewayDbName,
+      gatewayDbId: recoveryQueue.gatewayDbId
+    };
+
+    setRecoveryQueue(null);
+    setCurrentExtractionQueue(queueToProcess);
+    await processQueue(queueToProcess);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -970,6 +1029,7 @@ export default function App() {
       const file = e.dataTransfer.files[0];
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         setSelectedFile(file);
+        setGatewayDbName(file.name.replace(/\.[^/.]+$/, '') + ' - CD');
         setConversionError(null);
       } else {
         setConversionError('Please upload a valid PDF document.');
@@ -982,6 +1042,7 @@ export default function App() {
       const file = e.target.files[0];
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         setSelectedFile(file);
+        setGatewayDbName(file.name.replace(/\.[^/.]+$/, '') + ' - CD');
         setConversionError(null);
       } else {
         setConversionError('Please upload a valid PDF document.');
@@ -1086,6 +1147,8 @@ export default function App() {
     nextIndex: number;
     chunkSize: number;
     startPageOffset: number;
+    gatewayDbName?: string;
+    gatewayDbId?: string | null;
   }) => {
     setIsExtracting(true);
     setIsPaused(false);
@@ -1093,9 +1156,27 @@ export default function App() {
     setConversionError(null);
 
     const { chunks, mode, filename, nextIndex, chunkSize, startPageOffset } = queue;
+    const dbName = queue.gatewayDbName || gatewayDbName || `Database - Extracted ${Date.now()}`;
+    let activeDbId = queue.gatewayDbId || gatewayDbId;
+
+    // Load initial accumulated diaries for chunk merging
+    let accumulatedDiaries: CaseDiary[] = [];
+    if (nextIndex > 0) {
+      try {
+        const cached = localStorage.getItem('gateway_extracted_diaries');
+        if (cached) {
+          accumulatedDiaries = JSON.parse(cached);
+        }
+      } catch (e) {
+        console.warn("Failed to load cached diaries from localStorage", e);
+      }
+    }
+
+    let currentProcessingIdx = nextIndex;
 
     try {
       for (let cIdx = nextIndex; cIdx < chunks.length; cIdx++) {
+        currentProcessingIdx = cIdx;
         if (isPausedRef.current) {
           setCurrentExtractionQueue({
             chunks,
@@ -1103,7 +1184,9 @@ export default function App() {
             filename,
             nextIndex: cIdx,
             chunkSize,
-            startPageOffset
+            startPageOffset,
+            gatewayDbName: dbName,
+            gatewayDbId: activeDbId
           });
           setIsExtracting(false);
           return;
@@ -1136,7 +1219,9 @@ export default function App() {
               filename,
               nextIndex: cIdx,
               chunkSize,
-              startPageOffset
+              startPageOffset,
+              gatewayDbName: dbName,
+              gatewayDbId: activeDbId
             });
             setIsExtracting(false);
             return;
@@ -1180,8 +1265,92 @@ export default function App() {
 
         const chunkResult = await response.json();
         if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
+          // Process and map chunkResult.data to CaseDiary format
+          const rawDiaries: CaseDiary[] = chunkResult.data.map((diary: any, idx: number) => ({
+            ...diary,
+            id: `${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
+            policeStation: diary.policeStation || 'VIKKIRAMANGALAM',
+            district: diary.district || 'ARIYALUR',
+            crNoAndSecOfLaw: diary.crNoAndSecOfLaw || '0288/2018',
+            dateTimeAndPlaceOfOccurrence: diary.dateTimeAndPlaceOfOccurrence || '',
+            dateOfCd: diary.dateOfCd || '',
+            dateOfReportTime: diary.dateOfReportTime || '',
+            complainant: diary.complainant || '',
+            accusedList: Array.isArray(diary.accusedList) ? diary.accusedList : [],
+            propertyLostDetails: diary.propertyLostDetails || '',
+            recoveredPropertyDetails: diary.recoveredPropertyDetails || '',
+            dateOfPreviousCaseDiary: diary.dateOfPreviousCaseDiary || '',
+            stageOfTheCase: diary.stageOfTheCase || 'PENDING TRIAL',
+            courtRefNo: diary.courtRefNo || '',
+            hearingNo: diary.hearingNo || '',
+            courtNameAndPlace: diary.courtNameAndPlace || '',
+            whetherMagistratePresent: diary.whetherMagistratePresent || 'YES',
+            whetherAppPpPresent: diary.whetherAppPpPresent || 'YES',
+            whetherDefenceCounselPresent: diary.whetherDefenceCounselPresent || 'NO',
+            noOfPwsCited: diary.noOfPwsCited || '0',
+            noOfPwsExaminedSoFar: diary.noOfPwsExaminedSoFar || '0',
+            noOfPwsExaminedToday: diary.noOfPwsExaminedToday || '0',
+            totalNoOfAccusedCharged: diary.totalNoOfAccusedCharged || '0',
+            noOfAccusedPresent: diary.noOfAccusedPresent || '0',
+            noOfAccusedAbsent: diary.noOfAccusedAbsent || '0',
+            remarks: diary.remarks || '',
+            postedFor: diary.postedFor || '',
+            nextHearingDate: diary.nextHearingDate || '',
+            attendedBy: diary.attendedBy || '',
+          }));
+
+          const combined = [...accumulatedDiaries, ...rawDiaries];
+          const seenKeys = new Set<string>();
+          const filteredAccumulated: CaseDiary[] = [];
+          combined.forEach((diary) => {
+            const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
+            if (!seenKeys.has(key)) {
+              seenKeys.add(key);
+              filteredAccumulated.push(diary);
+            }
+          });
+          accumulatedDiaries = filteredAccumulated;
+
           appendChunkDiaries(chunkResult.data);
           addLocalLog(`Successfully structured batch ${cIdx + 1} of ${chunks.length}.`, 'SUCCESS');
+
+          // Cache current extraction state in LocalStorage for sudden disconnect recovery
+          localStorage.setItem('gateway_extracted_diaries', JSON.stringify(accumulatedDiaries));
+          const updatedQueueState = {
+            chunks,
+            mode,
+            filename,
+            nextIndex: cIdx + 1,
+            chunkSize,
+            startPageOffset,
+            gatewayDbName: dbName,
+            gatewayDbId: activeDbId
+          };
+          localStorage.setItem('gateway_extraction_queue', JSON.stringify(updatedQueueState));
+
+          // Auto-save parsed results to database in the background as they are fetched
+          if (user) {
+            addLocalLog(`Auto-saving ${accumulatedDiaries.length} records to Cloud database...`, 'SYSTEM');
+            try {
+              const saved = await saveSavedDatabase(dbName, accumulatedDiaries, user.uid, activeDbId || undefined);
+              activeDbId = saved.id;
+              setGatewayDbId(saved.id);
+              
+              // Update state list
+              setSavedDatabases((prev) => {
+                const filtered = prev.filter(db => db.id !== saved.id);
+                return [saved, ...filtered];
+              });
+              
+              // Re-save queue to local storage to record the persistent database ID
+              updatedQueueState.gatewayDbId = saved.id;
+              localStorage.setItem('gateway_extraction_queue', JSON.stringify(updatedQueueState));
+              addLocalLog(`Cloud Auto-save successful (DB ID: ${saved.id}).`, 'SUCCESS');
+            } catch (dbErr: any) {
+              console.error("Cloud Auto-save failed:", dbErr);
+              addLocalLog(`Cloud Auto-save failed: ${dbErr.message || dbErr}. Data is cached in browser.`, 'ERROR');
+            }
+          }
         } else {
           throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
         }
@@ -1195,6 +1364,11 @@ export default function App() {
       setExtractionProgress(100);
       setExtractionStep('Reconstruction completed successfully!');
       addLocalLog('Pipeline complete. Rendering data schemas in Workspace...', 'SUCCESS');
+      
+      // Clean up localStorage caches since pipeline is fully complete
+      localStorage.removeItem('gateway_extraction_queue');
+      localStorage.removeItem('gateway_extracted_diaries');
+      
       setCurrentExtractionQueue(null);
       setIsExtracting(false);
     } catch (err: any) {
@@ -1207,15 +1381,22 @@ export default function App() {
         chunks,
         mode,
         filename,
-        nextIndex: nextIndex,
+        nextIndex: currentProcessingIdx,
         chunkSize,
-        startPageOffset
+        startPageOffset,
+        gatewayDbName: dbName,
+        gatewayDbId: activeDbId
       });
     }
   };
 
   const runExtraction = async () => {
     if (!selectedFile) return;
+
+    if (!gatewayDbName.trim()) {
+      alert("Please enter a database name before starting the reconstruction.");
+      return;
+    }
 
     setIsExtracting(true);
     setIsPaused(false);
@@ -1224,7 +1405,9 @@ export default function App() {
     setExtractionProgress(5);
     setExtractionLogs([]);
     setLastExtractedDiaries([]);
-    setGatewayDbName('');
+    setGatewayDbId(null);
+    localStorage.removeItem('gateway_extraction_queue');
+    localStorage.removeItem('gateway_extracted_diaries');
 
     addLocalLog('Starting case diary reconstruction pipeline...', 'SYSTEM');
     addLocalLog(`Target file: "${selectedFile.name}" (${(selectedFile.size / 1024).toFixed(1)} KB)`, 'SYSTEM');
@@ -1284,7 +1467,9 @@ export default function App() {
           filename: selectedFile.name,
           nextIndex: 0,
           chunkSize,
-          startPageOffset: startPageInput - 1
+          startPageOffset: startPageInput - 1,
+          gatewayDbName: gatewayDbName.trim(),
+          gatewayDbId: null
         };
         
         setCurrentExtractionQueue(queue);
@@ -1331,7 +1516,9 @@ export default function App() {
           filename: selectedFile.name,
           nextIndex: 0,
           chunkSize,
-          startPageOffset: startPageInput - 1
+          startPageOffset: startPageInput - 1,
+          gatewayDbName: gatewayDbName.trim(),
+          gatewayDbId: null
         };
 
         setCurrentExtractionQueue(queue);
@@ -1717,6 +1904,42 @@ export default function App() {
             >
               {activeTab === 'gateway' && (
                 <div className="max-w-2xl mx-auto w-full flex flex-col gap-6">
+                  {/* Recovery Banner */}
+                  {recoveryQueue && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="border rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm"
+                      style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-primary)' }}
+                    >
+                      <div className="flex items-start gap-3 min-w-0">
+                        <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: 'var(--th-primary)' }} />
+                        <div className="min-w-0">
+                          <h4 className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Unfinished Reconstruction Detected</h4>
+                          <p className="text-[10px] mt-0.5 font-medium leading-relaxed" style={{ color: 'var(--th-text3)' }}>
+                            We found an incomplete reconstruction for <strong className="font-mono text-[9px]">{recoveryQueue.filename}</strong>. You can resume processing from batch <strong className="font-mono">{recoveryQueue.nextIndex + 1} of {recoveryQueue.chunks.length}</strong>.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 shrink-0 w-full sm:w-auto">
+                        <button
+                          onClick={handleDismissRecovery}
+                          className="flex-1 sm:flex-none bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-[10.5px] font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer shadow-2xs"
+                        >
+                          Dismiss
+                        </button>
+                        <button
+                          onClick={handleResumeRecovery}
+                          className="flex-1 sm:flex-none text-white text-[10.5px] font-bold py-1.5 px-4 rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1"
+                          style={{ background: 'linear-gradient(135deg, var(--th-primary), var(--th-primary-dark))' }}
+                        >
+                          <Play className="w-3 h-3" />
+                          Resume Extraction
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+
                   {/* Uploader Card */}
                   <div className="backdrop-blur-md rounded-3xl p-6 shadow-sm border" style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}>
                     <h3 className="font-display font-semibold text-base mb-3 flex items-center gap-2" style={{ color: 'var(--th-text)' }}>
@@ -1791,8 +2014,22 @@ export default function App() {
                       <motion.div 
                         initial={{ opacity: 0, y: 5 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="mt-4"
+                        className="mt-4 space-y-4"
                       >
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
+                            Database Name for Auto-Save
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Case Files - Vikiramangalam - CD Oct"
+                            value={gatewayDbName}
+                            onChange={(e) => setGatewayDbName(e.target.value)}
+                            className="w-full bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-2.5 text-xs font-semibold text-gray-900 shadow-sm"
+                            style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                          />
+                        </div>
+
                         <button
                           id="start-convert-btn"
                           onClick={runExtraction}
@@ -1969,31 +2206,16 @@ export default function App() {
                       </div>
 
                       {/* Cloud Save & Workspace View Actions */}
-                      <div className="border-t pt-4 mt-2 space-y-4" style={{ borderColor: 'var(--th-border)' }}>
-                        <div className="flex flex-col gap-2">
-                          <label className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Cloud Database Name</label>
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              placeholder="e.g. Case Files - Vikiramangalam - CD Oct"
-                              value={gatewayDbName}
-                              onChange={(e) => setGatewayDbName(e.target.value)}
-                              className="flex-1 bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-2 text-xs font-semibold text-gray-900 shadow-sm"
-                            />
-                            <button
-                              onClick={handleSaveGatewayToDatabase}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 animate-fade-in"
-                            >
-                              <Save className="w-4 h-4" />
-                              Save to Database
-                            </button>
-                          </div>
+                      <div className="border-t pt-4 mt-2 flex flex-col sm:flex-row items-center justify-between gap-4" style={{ borderColor: 'var(--th-border)' }}>
+                        <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-1.5 rounded-xl border border-emerald-100 dark:border-emerald-900/30 text-xs font-semibold">
+                          <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <span>Auto-saved to Cloud DB: <strong className="font-mono text-[11px]">{gatewayDbName || 'Database'}</strong></span>
                         </div>
 
-                        <div className="flex justify-end gap-2.5">
+                        <div className="flex justify-end gap-2.5 w-full sm:w-auto">
                           <button
                             onClick={handleViewGatewayInWorkspace}
-                            className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-4 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                            className="w-full sm:w-auto bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-xs"
                           >
                             <Eye className="w-4 h-4 text-gray-400" />
                             View in Workspace
