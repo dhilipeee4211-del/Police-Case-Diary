@@ -2195,24 +2195,38 @@ export default function App() {
         <div className="hidden lg:block backdrop-blur-xl border-b sticky top-[61px] z-40" style={{ background: 'var(--th-header-bg)', borderColor: 'var(--th-header-border)' }}>
           <div className="max-w-7xl mx-auto px-8 py-2 flex items-center justify-between">
             <div className="flex items-center gap-1">
-              {(['gateway', 'records', 'editor', 'dashboard'] as const).map((tab) => {
+              {(['gateway', 'records', 'editor', 'bulkexport', 'dashboard'] as const).map((tab) => {
                 const isActive = activeTab === tab;
-                const labels: Record<string, string> = {
+                const labels: Record<string, React.ReactNode> = {
                   gateway: 'Gateway Terminal',
                   records: 'Case Files & Databases',
                   editor: 'Form Workspace',
+                  bulkexport: (
+                    <span className="flex items-center gap-1.5">
+                      Bulk Export
+                      {bulkSelectedIds.size > 0 && (
+                        <span className="px-1.5 py-0.5 text-[9px] font-bold rounded-full text-white leading-none" style={{ background: 'var(--th-primary)' }}>
+                          {bulkSelectedIds.size}
+                        </span>
+                      )}
+                    </span>
+                  ),
                   dashboard: roleInfo.level === 'admin' ? 'SP Control Center' : 'System Dashboard'
                 };
                 const icons: Record<string, React.ReactNode> = {
                   gateway: <UploadCloud className="w-4 h-4" />,
                   records: <FileText className="w-4 h-4" />,
                   editor: <Edit3 className="w-4 h-4" />,
+                  bulkexport: <PackageOpen className="w-4 h-4" />,
                   dashboard: <Shield className="w-4 h-4" />
                 };
                 return (
                   <button
                     key={tab}
-                    onClick={() => setActiveTab(tab)}
+                    onClick={() => {
+                      if (tab === 'bulkexport') { setActiveTab('bulkexport'); setBulkSelectedIds(new Set()); }
+                      else setActiveTab(tab);
+                    }}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer`}
                     style={isActive ? {
                       background: 'var(--th-tab-active-bg)',
