@@ -61,11 +61,15 @@ export async function saveSavedDatabase(
 }
 
 // Get all databases for the current user (merges server and localStorage seamlessly)
-export async function getSavedDatabases(userId: string): Promise<SavedDatabase[]> {
+export async function getSavedDatabases(userId: string, email?: string): Promise<SavedDatabase[]> {
   const localDbs = getLocalDatabases(userId);
 
   try {
-    const serverResponse = await fetch(`/api/db/list?userId=${encodeURIComponent(userId)}`);
+    let url = `/api/db/list?userId=${encodeURIComponent(userId)}`;
+    if (email) {
+      url += `&email=${encodeURIComponent(email)}`;
+    }
+    const serverResponse = await fetch(url);
     if (serverResponse.ok) {
       const result = await serverResponse.json();
       if (result.success && Array.isArray(result.databases)) {

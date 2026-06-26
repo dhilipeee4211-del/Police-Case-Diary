@@ -527,6 +527,32 @@ const DATA_DIR = process.env.VERCEL
   ? path.join(os.tmpdir(), 'police-case-diary-data')
   : path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'databases.json');
+const ACCESS_FILE = path.join(DATA_DIR, 'database_access.json');
+
+// Helper to read database access mappings from disk
+function readAccessMap(): Record<string, string[]> {
+  try {
+    ensureDataDirExists();
+    if (!fs.existsSync(ACCESS_FILE)) {
+      return {};
+    }
+    const data = fs.readFileSync(ACCESS_FILE, 'utf8');
+    return JSON.parse(data || '{}');
+  } catch (err) {
+    console.error('Error reading database_access.json:', err);
+    return {};
+  }
+}
+
+// Helper to write database access mappings to disk
+function writeAccessMap(accessMap: Record<string, string[]>): void {
+  try {
+    ensureDataDirExists();
+    fs.writeFileSync(ACCESS_FILE, JSON.stringify(accessMap, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Error writing database_access.json:', err);
+  }
+}
 
 // Ensure the data directory exists lazily to prevent tracing errors in serverless environments
 function ensureDataDirExists() {
@@ -688,19 +714,26 @@ CREATE POLICY "Allow delete for user" ON case_databases
   }
 });
 
-// Endpoint: List all databases for a specific user (Dual local disk & Supabase)
+// Endpoint: List all databases for a specific user (Dual local disk & Supabase) with access control
 app.get('/api/db/list', async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, email } = req.query;
     if (!userId) {
       return res.status(400).json({ error: 'Missing userId parameter' });
     }
 
-    // Always read from local server storage first as fallback/cache
-    const localDbs = readServerDatabases().filter((db: any) => db.userId === userId);
+    const userEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    const isAdmin = userEmail === 'dhilipeee4211@gmail.com';
+    const accessMap = readAccessMap();
+    const allowedDbIds = accessMap[userEmail] || [];
+
+    // Filter local disk databases based on ownership/permissions
+    let localDbs = readServerDatabases();
+    if (!isAdmin) {
+      localDbs = localDbs.filter((db: any) => db.userId === userId || allowedDbIds.includes(db.id));
+    }
 
     if (!supabaseServerClient) {
-      // Supabase unconfigured, return local disk databases
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
       return res.json({ 
         success: true, 
@@ -711,28 +744,46 @@ app.get('/api/db/list', async (req, res) => {
     }
 
     try {
-      const { data, error } = await withTimeout(
-        supabaseServerClient
-          .from('case_databases')
-          .select('*')
-          .eq('user_id', userId),
-        3000,
-        'Supabase list query timed out'
-      );
+      let data: any[] = [];
+      if (isAdmin) {
+        // Admin gets everything
+        const { data: allData, error } = await withTimeout(
+          supabaseServerClient.from('case_databases').select('*'),
+          3500,
+          'Supabase list query timed out'
+        );
+        if (error) throw error;
+        if (allData) data = allData;
+      } else {
+        // Fetch own databases
+        const ownRes = await withTimeout(
+          supabaseServerClient.from('case_databases').select('*').eq('user_id', userId),
+          3000,
+          'Supabase own list query timed out'
+        );
+        if (ownRes.error) throw ownRes.error;
+        if (ownRes.data) data.push(...ownRes.data);
 
-      if (error) {
-        console.log('Supabase query error, falling back to disk:', error);
-        localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-        return res.json({ 
-          success: true, 
-          databases: localDbs, 
-          source: 'disk', 
-          error: error.message 
-        });
+        // Fetch shared databases
+        if (allowedDbIds.length > 0) {
+          const sharedRes = await withTimeout(
+            supabaseServerClient.from('case_databases').select('*').in('id', allowedDbIds),
+            3000,
+            'Supabase shared list query timed out'
+          );
+          if (sharedRes.error) throw sharedRes.error;
+          if (sharedRes.data) {
+            // Avoid duplicate objects if some allowedDbId is also owned by the user
+            sharedRes.data.forEach((item: any) => {
+              if (!data.some((d: any) => d.id === item.id)) {
+                data.push(item);
+              }
+            });
+          }
+        }
       }
 
       if (Array.isArray(data)) {
-        // Map snake_case database columns back to camelCase SavedDatabase type
         const mappedDbs = data.map((item: any) => ({
           id: item.id,
           userId: item.user_id,
@@ -741,20 +792,21 @@ app.get('/api/db/list', async (req, res) => {
           diaries: typeof item.diaries === 'string' ? JSON.parse(item.diaries) : item.diaries,
         }));
         
-        // Merge Supabase databases with any local disk ones to be perfectly in sync
         const mergedMap = new Map();
         localDbs.forEach(db => mergedMap.set(db.id, db));
         mappedDbs.forEach(db => mergedMap.set(db.id, db));
         
         const finalDbs = Array.from(mergedMap.values());
         
-        // Write the merged result back to local cache
-        const allLocalRest = readServerDatabases().filter((db: any) => db.userId !== userId);
+        // Update local cache for this specific set
+        const allLocalRest = readServerDatabases().filter((db: any) => {
+          if (isAdmin) return false;
+          return db.userId !== userId && !allowedDbIds.includes(db.id);
+        });
         writeServerDatabases([...allLocalRest, ...finalDbs]);
 
-        // Sort descending by creation date
         finalDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-        console.log(`Loaded ${finalDbs.length} databases (merged Supabase and local cache) for user ${userId}`);
+        console.log(`Loaded ${finalDbs.length} databases (merged Supabase and local cache) for user ${userId} (${userEmail})`);
         return res.json({ success: true, databases: finalDbs, source: 'supabase_merged' });
       }
 
@@ -763,12 +815,55 @@ app.get('/api/db/list', async (req, res) => {
     } catch (err: any) {
       console.log('Supabase fetch exception, falling back to disk:', err);
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      return res.json({ success: true, databases: localDbs, source: 'disk', error: err.message || String(err) });
+      return res.json({ success: true, databases: localDbs, source: 'disk', error: err.message });
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error in /api/db/list:', err);
-    return res.status(500).json({ error: err.message || 'Server database load error' });
+    return res.status(500).json({ error: 'Failed to retrieve databases' });
   }
+});
+
+// Endpoint: GET database access map (Admin only)
+app.get('/api/db/access', (req, res) => {
+  const { email } = req.query;
+  if (!email || email !== 'dhilipeee4211@gmail.com') {
+    return res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
+  }
+  const accessMap = readAccessMap();
+  return res.json({ success: true, accessMap });
+});
+
+// Endpoint: POST database access update (Admin only)
+app.post('/api/db/access', (req, res) => {
+  const { requesterEmail, targetEmail, dbId, action } = req.body;
+  
+  if (!requesterEmail || requesterEmail !== 'dhilipeee4211@gmail.com') {
+    return res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
+  }
+  
+  if (!targetEmail || !dbId || !action) {
+    return res.status(400).json({ error: 'Missing parameters. Need targetEmail, dbId, and action.' });
+  }
+  
+  const accessMap = readAccessMap();
+  const lowerTargetEmail = targetEmail.toLowerCase().trim();
+  
+  if (!accessMap[lowerTargetEmail]) {
+    accessMap[lowerTargetEmail] = [];
+  }
+  
+  if (action === 'grant') {
+    if (!accessMap[lowerTargetEmail].includes(dbId)) {
+      accessMap[lowerTargetEmail].push(dbId);
+    }
+  } else if (action === 'revoke') {
+    accessMap[lowerTargetEmail] = accessMap[lowerTargetEmail].filter((id: string) => id !== dbId);
+  } else {
+    return res.status(400).json({ error: 'Invalid action. Use "grant" or "revoke".' });
+  }
+  
+  writeAccessMap(accessMap);
+  return res.json({ success: true, accessMap });
 });
 
 // Endpoint: Save or update a database entry (Dual local disk & Supabase)

@@ -159,6 +159,16 @@ export default function App() {
   const [needsAuth, setNeedsAuth] = useState<boolean>(true);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  
+  // Custom Selection Checkbox States
+  const [selectedSearchCaseIds, setSelectedSearchCaseIds] = useState<{ dbId: string; diaryId: string }[]>([]);
+  const [selectedWorkspaceCaseIds, setSelectedWorkspaceCaseIds] = useState<string[]>([]);
+
+  // Admin Access Panel States
+  const [adminAccessMap, setAdminAccessMap] = useState<Record<string, string[]>>({});
+  const [adminTargetEmail, setAdminTargetEmail] = useState<string>('');
+  const [adminSelectedDbId, setAdminSelectedDbId] = useState<string>('');
+  const [isUpdatingAccess, setIsUpdatingAccess] = useState<boolean>(false);
 
   // Conversion States
   const [dragActive, setDragActive] = useState<boolean>(false);
@@ -426,21 +436,85 @@ export default function App() {
   // Load saved databases when the user loads or changes
   useEffect(() => {
     if (user?.uid) {
-      loadDatabases(user.uid);
+      loadDatabases(user.uid, user.email || undefined);
     } else {
       setSavedDatabases([]);
     }
   }, [user]);
 
-  const loadDatabases = async (uid: string) => {
+  const loadDatabases = async (uid: string, email?: string) => {
     setIsLoadingDbs(true);
     try {
-      const dbs = await getSavedDatabases(uid);
+      const dbs = await getSavedDatabases(uid, email);
       setSavedDatabases(dbs);
     } catch (err) {
       console.error('Error loading databases:', err);
     } finally {
       setIsLoadingDbs(false);
+    }
+  };
+
+  const fetchAccessMap = async () => {
+    if (user?.email !== 'dhilipeee4211@gmail.com') return;
+    try {
+      const response = await fetch(`/api/db/access?email=${encodeURIComponent(user.email)}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setAdminAccessMap(data.accessMap || {});
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching database access map:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'dashboard' && user?.email === 'dhilipeee4211@gmail.com') {
+      fetchAccessMap();
+    }
+  }, [activeTab, user]);
+
+  const handleUpdateAccess = async (targetEmail: string, dbId: string, action: 'grant' | 'revoke') => {
+    if (!user?.email || user.email !== 'dhilipeee4211@gmail.com') return;
+    if (!targetEmail.trim() || !dbId) {
+      alert('Please select both a target email and a database.');
+      return;
+    }
+    setIsUpdatingAccess(true);
+    try {
+      const response = await fetch('/api/db/access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requesterEmail: user.email,
+          targetEmail: targetEmail.toLowerCase().trim(),
+          dbId,
+          action
+        })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setAdminAccessMap(data.accessMap || {});
+          if (action === 'grant') {
+            setAdminTargetEmail('');
+            setAdminSelectedDbId('');
+            alert('Access successfully granted.');
+          } else {
+            alert('Access successfully revoked.');
+          }
+        } else {
+          alert('Failed to update access: ' + data.error);
+        }
+      } else {
+        const data = await response.json();
+        alert('Failed to update access: ' + (data.error || 'Server error'));
+      }
+    } catch (err: any) {
+      alert('Network error updating access: ' + err.message);
+    } finally {
+      setIsUpdatingAccess(false);
     }
   };
 
@@ -562,6 +636,7 @@ export default function App() {
       setLoadedDbName(dbItem.name);
       setIsSaved(true);
       setSidebarTab('workspace');
+      setActiveTab('editor');
     } else {
       alert("This saved database contains no diary entries.");
     }
@@ -656,6 +731,7 @@ export default function App() {
     setLoadedDbName(dbItem.name);
     setIsSaved(true);
     setSidebarTab('workspace');
+    setActiveTab('editor');
   };
 
   const handleDeleteWorkspaceDiary = (diaryId: string, e?: React.MouseEvent) => {
@@ -1701,6 +1777,7 @@ export default function App() {
                                 })
                                 .map((diary) => {
                                   const isSelected = selectedDiaryId === diary.id;
+                                  const isChecked = selectedWorkspaceCaseIds.includes(diary.id);
                                   return (
                                     <div
                                       key={diary.id}
@@ -1714,6 +1791,22 @@ export default function App() {
                                         setActiveTab('editor');
                                       }}
                                     >
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedWorkspaceCaseIds(prev => {
+                                            if (prev.includes(diary.id)) {
+                                              return prev.filter(id => id !== diary.id);
+                                            } else {
+                                              return [...prev, diary.id];
+                                            }
+                                          });
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="w-3.5 h-3.5 rounded text-indigo-655 focus:ring-indigo-500 border-gray-300 cursor-pointer shrink-0"
+                                      />
                                       <div className={`p-2 rounded-xl shrink-0 ${isSelected ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100/85 text-gray-400'}`}>
                                         <FileText className="w-4 h-4" />
                                       </div>
@@ -1783,18 +1876,51 @@ export default function App() {
                                 </span>
                               </div>
                               
-                              <button
-                                onClick={handleBulkExportZip}
-                                disabled={isBulkExporting}
-                                className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                              >
-                                {isBulkExporting ? (
-                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                ) : (
-                                  <FileDown className="w-3.5 h-3.5" />
-                                )}
-                                Bulk Export Saved Drafts (.ZIP)
-                              </button>
+                              {selectedWorkspaceCaseIds.length > 0 ? (
+                                <div className="flex flex-col sm:flex-row gap-2.5">
+                                  <button
+                                    onClick={() => {
+                                      const loaded = diaries.filter(d => selectedWorkspaceCaseIds.includes(d.id));
+                                      if (loaded.length > 0) {
+                                        setDiaries(loaded);
+                                        setSelectedDiaryId(loaded[0].id);
+                                        setSelectedWorkspaceCaseIds([]);
+                                        setActiveTab('editor');
+                                        addLocalLog(`Loaded ${loaded.length} selected cases into workspace`, 'SYSTEM');
+                                      }
+                                    }}
+                                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer animate-pulse-ripple"
+                                  >
+                                    <Layers className="w-3.5 h-3.5" />
+                                    Load Data ({selectedWorkspaceCaseIds.length})
+                                  </button>
+                                  <button
+                                    onClick={handleBulkExportZip}
+                                    disabled={isBulkExporting}
+                                    className="flex-1 bg-purple-605 hover:bg-purple-700 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                  >
+                                    {isBulkExporting ? (
+                                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <FileDown className="w-3.5 h-3.5" />
+                                    )}
+                                    Bulk Export Saved Drafts (.ZIP)
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={handleBulkExportZip}
+                                  disabled={isBulkExporting}
+                                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                                >
+                                  {isBulkExporting ? (
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <FileDown className="w-3.5 h-3.5" />
+                                  )}
+                                  Bulk Export Saved Drafts (.ZIP)
+                                </button>
+                              )}
                               <p className="text-[9px] text-gray-400 mt-1.5 text-center leading-normal">
                                 Only case diaries with completed draft saves will be included in the exported ZIP archive.
                               </p>
@@ -2151,79 +2277,143 @@ export default function App() {
                           <Search className="w-4 h-4 text-indigo-500" />
                           Load/Search Case
                         </button>
-                        
-                        {showWorkspaceSearch && (
-                          <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-2xl shadow-xl p-3.5 z-50 animate-fade-in">
-                            <div className="flex items-center justify-between pb-2 border-b border-gray-100 mb-2">
-                              <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider">Search Case Library</span>
-                              <button 
-                                onClick={() => setShowWorkspaceSearch(false)}
-                                className="text-gray-400 hover:text-gray-600 font-bold text-xs"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                            <input
-                              type="text"
-                              placeholder="Search past case no, station, or DB..."
-                              value={workspaceSearchQuery}
-                              onChange={(e) => setWorkspaceSearchQuery(e.target.value)}
-                              className="w-full px-3 py-1.5 border border-gray-200 focus:border-indigo-500 rounded-xl text-xs font-semibold text-gray-900 shadow-sm focus:outline-none"
-                              autoFocus
-                            />
-                            <div className="mt-2.5 max-h-60 overflow-y-auto space-y-1.5 pr-1">
-                              {(() => {
-                                const query = workspaceSearchQuery.toLowerCase().trim();
-                                const matches: { db: SavedDatabase; diary: CaseDiary; matchText: string }[] = [];
-                                
-                                savedDatabases.forEach((db) => {
-                                  db.diaries.forEach((diary) => {
-                                    const crNo = diary.crNoAndSecOfLaw || '';
-                                    const station = diary.policeStation || '';
-                                    const dateOfCd = diary.dateOfCd || '';
-                                    
-                                    if (!query || 
-                                        db.name.toLowerCase().includes(query) ||
-                                        crNo.toLowerCase().includes(query) ||
-                                        station.toLowerCase().includes(query) ||
-                                        dateOfCd.toLowerCase().includes(query)
-                                    ) {
-                                      matches.push({
-                                        db,
-                                        diary,
-                                        matchText: `${crNo} (${dateOfCd}) - ${station}`
-                                      });
-                                    }
-                                  });
+                                           {showWorkspaceSearch && (() => {
+                          const query = workspaceSearchQuery.toLowerCase().trim();
+                          const matches: { db: SavedDatabase; diary: CaseDiary; matchText: string }[] = [];
+                          
+                          savedDatabases.forEach((db) => {
+                            db.diaries.forEach((diary) => {
+                              const crNo = diary.crNoAndSecOfLaw || '';
+                              const station = diary.policeStation || '';
+                              const dateOfCd = diary.dateOfCd || '';
+                              
+                              if (!query || 
+                                  db.name.toLowerCase().includes(query) ||
+                                  crNo.toLowerCase().includes(query) ||
+                                  station.toLowerCase().includes(query) ||
+                                  dateOfCd.toLowerCase().includes(query)
+                              ) {
+                                matches.push({
+                                  db,
+                                  diary,
+                                  matchText: `${crNo} (${dateOfCd}) - ${station}`
                                 });
-                                
-                                if (matches.length === 0) {
-                                  return <p className="text-[10px] text-gray-400 text-center py-4 font-semibold">No matching cases found</p>;
-                                }
-                                
-                                return matches.map(({ db, diary }, idx) => (
+                              }
+                            });
+                          });
+                          
+                          return (
+                            <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-2xl shadow-xl p-3.5 z-50 animate-fade-in">
+                              <div className="flex items-center justify-between pb-2 border-b border-gray-100 mb-2">
+                                <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider">Search Case Library</span>
+                                <button 
+                                  onClick={() => {
+                                    setShowWorkspaceSearch(false);
+                                    setSelectedSearchCaseIds([]);
+                                  }}
+                                  className="text-gray-400 hover:text-gray-600 font-bold text-xs"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="Search past case no, station, or DB..."
+                                value={workspaceSearchQuery}
+                                onChange={(e) => setWorkspaceSearchQuery(e.target.value)}
+                                className="w-full px-3 py-1.5 border border-gray-200 focus:border-indigo-500 rounded-xl text-xs font-semibold text-gray-900 shadow-sm focus:outline-none"
+                                autoFocus
+                              />
+                              <div className="mt-2.5 max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                                {matches.length === 0 ? (
+                                  <p className="text-[10px] text-gray-400 text-center py-4 font-semibold">No matching cases found</p>
+                                ) : (
+                                  matches.map(({ db, diary }, idx) => {
+                                    const isChecked = selectedSearchCaseIds.some(
+                                      (item) => item.dbId === db.id && item.diaryId === diary.id
+                                    );
+                                    return (
+                                      <div
+                                        key={`${db.id}-${diary.id}-${idx}`}
+                                        onClick={() => {
+                                          setDiaries([diary]);
+                                          setSelectedDiaryId(diary.id);
+                                          setLoadedDbId(db.id);
+                                          setLoadedDbName(db.name);
+                                          setIsSaved(true);
+                                          setShowWorkspaceSearch(false);
+                                          setWorkspaceSearchQuery('');
+                                          setSelectedSearchCaseIds([]);
+                                          addLocalLog(`Loaded case "${diary.crNoAndSecOfLaw}" inline from database "${db.name}"`, 'SYSTEM');
+                                        }}
+                                        className="w-full text-left p-2 rounded-xl hover:bg-indigo-50/50 hover:text-indigo-950 transition-all text-[11px] font-semibold text-gray-700 flex items-center gap-2.5 border border-transparent hover:border-indigo-100 cursor-pointer"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedSearchCaseIds(prev => {
+                                              const exists = prev.some(item => item.dbId === db.id && item.diaryId === diary.id);
+                                              if (exists) {
+                                                return prev.filter(item => !(item.dbId === db.id && item.diaryId === diary.id));
+                                              } else {
+                                                return [...prev, { dbId: db.id, diaryId: diary.id }];
+                                              }
+                                            });
+                                          }}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="w-3.5 h-3.5 rounded text-indigo-650 focus:ring-indigo-500 border-gray-300 cursor-pointer shrink-0"
+                                        />
+                                        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                                          <span className="text-indigo-955 truncate font-bold">{diary.crNoAndSecOfLaw}</span>
+                                          <span className="text-[9.5px] text-gray-400 truncate">Station: {diary.policeStation} • DB: {db.name}</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                              
+                              {matches.length > 0 && (
+                                <div className="mt-3 pt-2 border-t border-gray-100 flex justify-between items-center">
+                                  <span className="text-[10.5px] font-bold text-gray-500">
+                                    {selectedSearchCaseIds.length} Selected
+                                  </span>
                                   <button
-                                    key={`${db.id}-${diary.id}-${idx}`}
                                     onClick={() => {
-                                      setDiaries(db.diaries);
-                                      setSelectedDiaryId(diary.id);
-                                      setLoadedDbId(db.id);
-                                      setLoadedDbName(db.name);
-                                      setIsSaved(true);
-                                      setShowWorkspaceSearch(false);
-                                      setWorkspaceSearchQuery('');
-                                      addLocalLog(`Loaded case "${diary.crNoAndSecOfLaw}" from database "${db.name}"`, 'SYSTEM');
+                                      const selectedDiaries = matches
+                                        .filter(m => selectedSearchCaseIds.some(s => s.dbId === m.db.id && s.diaryId === m.diary.id))
+                                        .map(m => m.diary);
+                                      
+                                      if (selectedDiaries.length > 0) {
+                                        setDiaries(selectedDiaries);
+                                        setSelectedDiaryId(selectedDiaries[0].id);
+                                        
+                                        const firstMatch = matches.find(m => selectedSearchCaseIds.some(s => s.dbId === m.db.id && s.diaryId === m.diary.id));
+                                        if (firstMatch) {
+                                          setLoadedDbId(firstMatch.db.id);
+                                          setLoadedDbName(firstMatch.db.name);
+                                        }
+                                        
+                                        setIsSaved(true);
+                                        setShowWorkspaceSearch(false);
+                                        setWorkspaceSearchQuery('');
+                                        setSelectedSearchCaseIds([]);
+                                        addLocalLog(`Loaded ${selectedDiaries.length} selected cases inline`, 'SYSTEM');
+                                      } else {
+                                        alert("Please check at least one case to load.");
+                                      }
                                     }}
-                                    className="w-full text-left p-2 rounded-xl hover:bg-indigo-50/50 hover:text-indigo-950 transition-all text-[11px] font-semibold text-gray-700 flex flex-col gap-0.5 border border-transparent hover:border-indigo-100 cursor-pointer"
+                                    className="px-3 py-1.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-[10.5px] font-bold shadow-xs hover:shadow-sm transition-all cursor-pointer"
                                   >
-                                    <span className="text-indigo-955 truncate font-bold">{diary.crNoAndSecOfLaw}</span>
-                                    <span className="text-[9.5px] text-gray-400 truncate">Station: {diary.policeStation} • DB: {db.name}</span>
+                                    Load Selected Cases
                                   </button>
-                                ));
-                              })()}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     </div>
                   )}
@@ -2934,6 +3124,118 @@ export default function App() {
                         </div>
                       )}
                     </div>
+
+                    {user?.email === 'dhilipeee4211@gmail.com' && (
+                      <div className="mt-8 p-6 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
+                        <div className="flex items-center gap-2 mb-4 pb-2 border-b border-gray-200">
+                          <Lock className="w-5 h-5 text-indigo-650" />
+                          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+                            Database Access Permissions Manager (Admin)
+                          </h4>
+                        </div>
+                        
+                        {/* Grant Access form */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end bg-white p-4 rounded-xl border border-gray-200/60 shadow-xs mb-6">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+                              User Email
+                            </label>
+                            <input
+                              type="email"
+                              placeholder="e.g. dhileepank2@gmail.com"
+                              value={adminTargetEmail}
+                              onChange={(e) => setAdminTargetEmail(e.target.value)}
+                              className="w-full px-3 py-2 bg-gray-50/50 focus:bg-white border border-gray-200 focus:border-indigo-500 focus:outline-none rounded-xl text-xs font-semibold text-gray-900 shadow-sm transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+                              Select Database
+                            </label>
+                            <select
+                              value={adminSelectedDbId}
+                              onChange={(e) => setAdminSelectedDbId(e.target.value)}
+                              className="w-full px-3 py-2 bg-gray-50/50 focus:bg-white border border-gray-200 focus:border-indigo-500 focus:outline-none rounded-xl text-xs font-bold text-gray-700 shadow-sm transition-all cursor-pointer"
+                            >
+                              <option value="">-- Choose Database --</option>
+                              {savedDatabases.map((db) => (
+                                <option key={db.id} value={db.id}>
+                                  {db.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <button
+                              onClick={() => handleUpdateAccess(adminTargetEmail, adminSelectedDbId, 'grant')}
+                              disabled={isUpdatingAccess || !adminTargetEmail || !adminSelectedDbId}
+                              className="w-full bg-indigo-650 hover:bg-indigo-755 disabled:bg-gray-100 disabled:text-gray-400 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer z-10"
+                            >
+                              {isUpdatingAccess ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Plus className="w-3.5 h-3.5" />
+                              )}
+                              Grant Access
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Assignments List */}
+                        <div className="space-y-3">
+                          <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wider">
+                            Active Share Permissions
+                          </span>
+                          
+                          {Object.keys(adminAccessMap).length === 0 || 
+                           Object.values(adminAccessMap).every(list => list.length === 0) ? (
+                            <p className="text-xs text-gray-400 font-medium italic bg-white py-4 text-center rounded-xl border border-gray-200/50">
+                              No sharing permissions assigned. Use the form above to grant access.
+                            </p>
+                          ) : (
+                            <div className="grid grid-cols-1 gap-3 max-h-[300px] overflow-y-auto pr-1">
+                              {Object.entries(adminAccessMap).map(([email, dbIds]) => {
+                                if (!dbIds || dbIds.length === 0) return null;
+                                return (
+                                  <div
+                                    key={email}
+                                    className="bg-white p-3.5 rounded-xl border border-gray-200/70 shadow-2xs flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                                  >
+                                    <div className="flex-1 min-w-0">
+                                      <span className="text-xs font-bold text-indigo-950 font-mono">
+                                        {email}
+                                      </span>
+                                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                        {dbIds.map((dbId) => {
+                                          const db = savedDatabases.find((d) => d.id === dbId);
+                                          return (
+                                            <span
+                                              key={dbId}
+                                              className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-indigo-50/70 text-indigo-700 text-[10px] font-bold rounded-lg border border-indigo-100"
+                                            >
+                                              <Database className="w-2.5 h-2.5 shrink-0" />
+                                              {db ? db.name : `DB ID: ${dbId}`}
+                                              
+                                              <button
+                                                onClick={() => handleUpdateAccess(email, dbId, 'revoke')}
+                                                className="ml-1 text-red-400 hover:text-red-600 font-bold hover:bg-red-50 p-0.5 rounded cursor-pointer z-10"
+                                                title="Revoke access"
+                                              >
+                                                ✕
+                                              </button>
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
