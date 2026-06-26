@@ -33,7 +33,9 @@ import {
   ChevronDown,
   Mic,
   MicOff,
-  Edit3
+  Edit3,
+  Shield,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initAuth, googleSignIn, logout } from './firebase';
@@ -44,6 +46,104 @@ import { User } from 'firebase/auth';
 import { CaseDiary, Accused, SavedDatabase } from './types';
 import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase } from './dbHelper';
 import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
+
+// Custom User Role Checker mapping
+const getUserRole = (email?: string | null) => {
+  if (!email) return { name: 'Offline Guest Officer', badge: 'Guest', level: 'guest', color: 'gray' };
+  const lowerEmail = email.toLowerCase().trim();
+  if (lowerEmail === 'dhilipeee4211@gmail.com') {
+    return { name: 'Superintendent of Police', badge: 'SP (Admin)', level: 'admin', color: 'gold' };
+  }
+  if (lowerEmail === 'dhileepank2@gmail.com' || lowerEmail === 'kgrraju4628@gmail.com') {
+    return { name: 'Investigating Officer', badge: 'Inspector', level: 'officer', color: 'blue' };
+  }
+  return { name: 'Officer / Guard', badge: 'Officer', level: 'officer', color: 'slate' };
+};
+
+// Outlined Material Input Component
+interface OutlinedInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label: string;
+  value?: any;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  className?: string;
+  onClear?: () => void;
+}
+
+function OutlinedInput({ label, value, onChange, onClear, className = '', ...props }: OutlinedInputProps) {
+  return (
+    <div className="relative w-full group">
+      <input
+        value={value}
+        onChange={onChange}
+        placeholder=" "
+        className={`peer w-full pt-5 pb-1.5 px-3.5 bg-white/60 focus:bg-white/95 border border-gray-200 focus:border-indigo-650 focus:ring-4 focus:ring-indigo-500/10 rounded-2xl text-xs font-semibold text-gray-900 focus:outline-none transition-all placeholder-transparent shadow-sm hover:border-gray-300 ${className}`}
+        {...props}
+      />
+      <label className="absolute left-3.5 top-3.5 text-xs font-bold text-gray-400 peer-placeholder-shown:text-xs peer-placeholder-shown:top-3.5 peer-placeholder-shown:left-3.5 peer-focus:top-1.5 peer-focus:left-3 peer-focus:text-[9px] peer-focus:text-indigo-650 transition-all pointer-events-none uppercase tracking-wider scale-100 peer-focus:scale-90 origin-top-left
+        peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:left-3 peer-[:not(:placeholder-shown)]:text-[9px] peer-[:not(:placeholder-shown)]:scale-90 peer-[:not(:placeholder-shown)]:text-indigo-650">
+        {label}
+      </label>
+      {value && onClear && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="absolute right-3.5 top-3.5 text-gray-400 hover:text-gray-600 text-xs font-bold transition-all cursor-pointer z-10"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Outlined Material Textarea Component with voice dictation support
+interface OutlinedTextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
+  label: string;
+  value?: any;
+  onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onVoiceClick?: () => void;
+  isListening?: boolean;
+  className?: string;
+  rows?: number;
+}
+
+function OutlinedTextarea({ label, value, onChange, onVoiceClick, isListening, className = '', rows = 3, ...props }: OutlinedTextareaProps) {
+  return (
+    <div className="relative w-full group">
+      <textarea
+        value={value}
+        onChange={onChange}
+        placeholder=" "
+        rows={rows}
+        className={`peer w-full pt-5 pb-1.5 pl-3.5 pr-12 bg-white/60 focus:bg-white/95 border border-gray-200 focus:border-indigo-650 focus:ring-4 focus:ring-indigo-500/10 rounded-2xl text-xs font-medium text-gray-900 focus:outline-none transition-all placeholder-transparent shadow-sm hover:border-gray-300 ${className}`}
+        {...props}
+      />
+      <label className="absolute left-3.5 top-3.5 text-xs font-bold text-gray-400 peer-placeholder-shown:text-xs peer-placeholder-shown:top-3.5 peer-placeholder-shown:left-3.5 peer-focus:top-1.5 peer-focus:left-3 peer-focus:text-[9px] peer-focus:text-indigo-650 transition-all pointer-events-none uppercase tracking-wider scale-100 peer-focus:scale-90 origin-top-left
+        peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:left-3 peer-[:not(:placeholder-shown)]:text-[9px] peer-[:not(:placeholder-shown)]:scale-90 peer-[:not(:placeholder-shown)]:text-indigo-650">
+        {label}
+      </label>
+      {onVoiceClick && (
+        <button
+          type="button"
+          onClick={onVoiceClick}
+          className={`absolute right-3.5 top-3 p-1.5 rounded-lg border transition-all cursor-pointer z-10 ${
+            isListening
+              ? 'bg-red-500 hover:bg-red-650 text-white border-red-600 animate-pulse-ripple'
+              : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 shadow-sm'
+          }`}
+          title="Voice Typing (Tamil/English)"
+        >
+          {isListening ? (
+            <MicOff className="w-3.5 h-3.5" />
+          ) : (
+            <Mic className="w-3.5 h-3.5 text-indigo-500" />
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
 
 
 export default function App() {
@@ -137,8 +237,11 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Tamil Voice Typing States
-  const [isListeningRemarks, setIsListeningRemarks] = useState<boolean>(false);
+  // Mobile active tab state
+  const [activeTab, setActiveTab] = useState<'gateway' | 'records' | 'editor' | 'dashboard'>('gateway');
+
+  // Tamil/English Voice Typing States
+  const [listeningField, setListeningField] = useState<keyof CaseDiary | null>(null);
   const [voiceTypingSupported, setVoiceTypingSupported] = useState<boolean>(true);
   const recognitionRef = useRef<any>(null);
 
@@ -149,7 +252,7 @@ export default function App() {
     }
   }, []);
 
-  const toggleRemarksVoiceTyping = async () => {
+  const toggleVoiceTyping = async (field: keyof CaseDiary) => {
     if (!voiceTypingSupported) {
       alert("Voice typing is not supported in this browser. Please try using Google Chrome or Safari.");
       return;
@@ -157,12 +260,18 @@ export default function App() {
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    if (isListeningRemarks) {
+    if (listeningField === field) {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
-      setIsListeningRemarks(false);
+      setListeningField(null);
       return;
+    }
+
+    if (listeningField) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
     }
 
     try {
@@ -175,7 +284,7 @@ export default function App() {
       recognition.lang = 'ta-IN'; // Tamil (India)
 
       recognition.onstart = () => {
-        setIsListeningRemarks(true);
+        setListeningField(field);
       };
 
       recognition.onresult = (event: any) => {
@@ -185,9 +294,9 @@ export default function App() {
         setDiaries((prev) =>
           prev.map((d) => {
             if (d.id === selectedDiaryId) {
-              const currentRemarks = d.remarks || '';
-              const separator = currentRemarks ? ' ' : '';
-              return { ...d, remarks: currentRemarks + separator + transcript };
+              const currentVal = (d[field] as string) || '';
+              const separator = currentVal ? ' ' : '';
+              return { ...d, [field]: currentVal + separator + transcript };
             }
             return d;
           })
@@ -200,11 +309,11 @@ export default function App() {
         if (event.error === 'not-allowed') {
           alert("Microphone permission denied. Please allow microphone access in your browser settings to use voice typing.");
         }
-        setIsListeningRemarks(false);
+        setListeningField(null);
       };
 
       recognition.onend = () => {
-        setIsListeningRemarks(false);
+        setListeningField(null);
       };
 
       recognitionRef.current = recognition;
@@ -212,9 +321,13 @@ export default function App() {
     } catch (err) {
       console.error("Failed to start speech recognition or get microphone permission:", err);
       alert("Microphone access is required for Voice Typing. Please allow microphone permissions or open this application in a new tab.");
-      setIsListeningRemarks(false);
+      setListeningField(null);
     }
   };
+
+  const isListeningRemarks = listeningField === 'remarks';
+  const toggleRemarksVoiceTyping = () => toggleVoiceTyping('remarks');
+
 
 
   // Initialize Auth state on load
@@ -1095,41 +1208,59 @@ export default function App() {
       setIsBulkExporting(false);
     }
   };
+  const roleInfo = getUserRole(user?.email);
 
   return (
-    <div className="min-h-screen bg-[#fafbfc] flex flex-col antialiased">
+    <div className="min-h-screen bg-slate-50/40 flex flex-col antialiased relative pb-20 lg:pb-0">
+      {/* Ambient shifting background gradient blobs */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none select-none z-0">
+        <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] bg-indigo-200/30 rounded-full blur-[120px] animate-float-slow" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] bg-purple-200/25 rounded-full blur-[120px] animate-float-reverse" />
+      </div>
+
       {/* Header Bar */}
-      <header className="border-b border-gray-200 bg-white sticky top-0 z-50 px-4 sm:px-6 py-3 sm:py-4">
+      <header className="border-b border-gray-200/80 bg-white/75 backdrop-blur-md sticky top-0 z-50 px-4 sm:px-6 py-3.5 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="p-1.5 sm:p-2 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
-              <Sparkles className="w-5 h-5 sm:w-6 sm:h-6" />
+            <div className="p-2 bg-indigo-50 text-indigo-650 rounded-xl shrink-0 shadow-xs">
+              <Sparkles className="w-5 h-5 sm:w-5.5 sm:h-5.5" />
             </div>
             <div className="min-w-0">
-              <h1 className="font-display font-semibold text-sm sm:text-base md:text-lg text-gray-950 tracking-tight truncate">AI Case Diary Reconstruction Workspace</h1>
-              <p className="text-[10px] sm:text-xs text-gray-400 sm:text-gray-500 font-medium truncate">Reconstruct, Form and Format Scanned Case Diaries with Pixel Precision</p>
+              <h1 className="font-display font-semibold text-sm sm:text-base text-gray-950 tracking-tight truncate">AI Case Diary Reconstruction Workspace</h1>
+              <p className="text-[9.5px] sm:text-[10px] text-gray-400 font-medium tracking-tight truncate">Reconstruct, Form and Format Scanned Case Diaries with Pixel Precision</p>
             </div>
           </div>
 
           {user && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 {user.photoURL ? (
-                  <img src={user.photoURL} alt={user.displayName || 'User'} className="w-8 h-8 rounded-full border border-gray-200" referrerPolicy="no-referrer" />
+                  <img src={user.photoURL} alt={user.displayName || 'User'} className="w-8.5 h-8.5 rounded-full border-2 border-indigo-500/20 shadow-xs" referrerPolicy="no-referrer" />
                 ) : (
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-semibold text-sm">
+                  <div className="w-8.5 h-8.5 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-650 text-white flex items-center justify-center font-bold text-sm shadow-xs">
                     {user.displayName?.charAt(0) || 'U'}
                   </div>
                 )}
                 <div className="hidden sm:block text-right">
-                  <p className="text-xs font-semibold text-gray-900 leading-tight">{user.displayName}</p>
-                  <p className="text-[10px] text-gray-400 font-medium leading-none">{user.email}</p>
+                  <div className="flex items-center gap-1.5 justify-end">
+                    <p className="text-xs font-bold text-gray-900 leading-tight">{user.displayName}</p>
+                    <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase border ${
+                      roleInfo.level === 'admin'
+                        ? 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                        : roleInfo.level === 'officer'
+                        ? 'bg-sky-500/10 text-sky-700 border-sky-500/30'
+                        : 'bg-slate-500/10 text-slate-700 border-slate-500/30'
+                    }`}>
+                      {roleInfo.badge}
+                    </span>
+                  </div>
+                  <p className="text-[9px] text-gray-400 font-medium leading-none">{user.email}</p>
                 </div>
               </div>
               <button 
                 id="sign-out-btn"
                 onClick={handleLogout} 
-                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                className="p-1.5 text-gray-450 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all cursor-pointer border border-gray-150/50 bg-white/70 backdrop-blur-xs shadow-xs"
                 title="Sign Out"
               >
                 <LogOut className="w-4 h-4" />
@@ -1138,6 +1269,73 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {/* Desktop Horizontal Tabs bar */}
+      {user && (
+        <div className="hidden lg:block bg-white/70 backdrop-blur-md border-b border-gray-200/80 sticky top-[61px] z-40">
+          <div className="max-w-7xl mx-auto px-8 py-2 flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setActiveTab('gateway')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'gateway'
+                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <UploadCloud className="w-4 h-4" />
+                Gateway Terminal
+              </button>
+              <button
+                onClick={() => setActiveTab('records')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'records'
+                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                Case Files & Databases
+              </button>
+              <button
+                onClick={() => setActiveTab('editor')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'editor'
+                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <Edit3 className="w-4 h-4" />
+                Form Workspace
+              </button>
+              <button
+                onClick={() => setActiveTab('dashboard')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'dashboard'
+                    ? 'bg-indigo-50 text-indigo-750 shadow-xs border border-indigo-100/50'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <Shield className="w-4 h-4" />
+                {roleInfo.level === 'admin' ? 'SP Control Center' : 'System Dashboard'}
+              </button>
+            </div>
+            
+            {/* Quick overview */}
+            <div className="flex items-center gap-3 text-xs text-gray-400 font-semibold">
+              <span className="flex items-center gap-1 text-indigo-650 bg-indigo-50 px-2.5 py-1 rounded-lg">
+                <Database className="w-3.5 h-3.5" />
+                {diaries.length} Diaries Loaded
+              </span>
+              {loadedDbName && (
+                <span className="text-gray-450">
+                  Active DB: <strong className="text-gray-650 font-bold">{loadedDbName}</strong>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-8">
@@ -1150,12 +1348,12 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -12 }}
               transition={{ duration: 0.25 }}
-              className="max-w-xl w-full mx-auto my-auto py-12 flex flex-col items-center"
+              className="max-w-xl w-full mx-auto my-auto py-12 flex flex-col items-center z-10"
             >
-              <div className="w-full bg-white border border-gray-200/80 rounded-2xl p-8 shadow-sm">
+              <div className="w-full glass-panel rounded-3xl p-8 shadow-sm border border-white/20">
                 <div className="text-center mb-8">
-                  <div className="mx-auto w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
-                    <Sparkles className="w-6 h-6" />
+                  <div className="mx-auto w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4 border border-indigo-100/30">
+                    <Sparkles className="w-6 h-6 animate-pulse" />
                   </div>
                   <h2 className="font-display font-semibold text-2xl text-gray-950 tracking-tight">Connect Workspace Profile</h2>
                   <p className="text-sm text-gray-500 mt-2">
@@ -1164,32 +1362,32 @@ export default function App() {
                 </div>
 
                 {/* Features Checklist */}
-                <div className="space-y-4 mb-8 bg-gray-50/50 p-5 rounded-xl border border-gray-100">
+                <div className="space-y-4 mb-8 bg-gray-50/50 p-5 rounded-2xl border border-gray-100">
                   <div className="flex gap-3">
-                    <CheckCircle className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+                    <CheckCircle className="w-5 h-5 text-indigo-650 shrink-0 mt-0.5" />
                     <div>
                       <p className="text-xs font-semibold text-gray-800">Advanced Visual Document Extraction</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5">Gemini 2.5 Flash analyzes columns, structures, and handwritten remarks instantly.</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Gemini 2.5 Flash analyzes columns, structures, and handwritten remarks instantly.</p>
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <CheckCircle className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+                    <CheckCircle className="w-5 h-5 text-indigo-650 shrink-0 mt-0.5" />
                     <div>
                       <p className="text-xs font-semibold text-gray-800">Bilingual Translation Engine</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5">Transcribe typewriter and Tamil text inputs directly into readable multi-column outputs.</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Transcribe typewriter and Tamil text inputs directly into readable multi-column outputs.</p>
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <CheckCircle className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+                    <CheckCircle className="w-5 h-5 text-indigo-650 shrink-0 mt-0.5" />
                     <div>
                       <p className="text-xs font-semibold text-gray-800">Pixel Perfect Word Output</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5">Download editable .docx files perfectly matching the official Case Diary layout guidelines.</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Download editable .docx files perfectly matching the official Case Diary layout guidelines.</p>
                     </div>
                   </div>
                 </div>
 
                 {authError && (
-                  <div className="mb-6 p-3 bg-red-50 text-red-700 text-xs rounded-lg flex items-start gap-2.5">
+                  <div className="mb-6 p-3 bg-red-50 text-red-700 text-xs rounded-xl flex items-start gap-2.5">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{authError}</span>
                   </div>
@@ -1200,7 +1398,7 @@ export default function App() {
                     id="gsi-login-btn"
                     onClick={handleLogin}
                     disabled={isLoggingIn}
-                    className="w-full flex items-center justify-center gap-3 px-6 py-3 border border-gray-300 rounded-xl bg-white hover:bg-gray-50 text-gray-700 text-sm font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-60"
+                    className="w-full flex items-center justify-center gap-3 px-6 py-3 border border-gray-300 rounded-2xl bg-white hover:bg-gray-50 text-gray-700 text-sm font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-60"
                   >
                     {isLoggingIn ? (
                       <RefreshCw className="w-4 h-4 animate-spin text-gray-400" />
@@ -1218,310 +1416,384 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleGuestAccess}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-2.5 border border-transparent rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold transition-all cursor-pointer"
+                    className="w-full flex items-center justify-center gap-2 px-6 py-2.5 border border-transparent rounded-2xl bg-indigo-50 hover:bg-indigo-100 text-indigo-750 text-xs font-bold transition-all cursor-pointer"
                   >
                     <span>Continue in Offline / Guest Mode</span>
                   </button>
 
-                  <p className="text-[10px] text-gray-400 mt-2 text-center leading-relaxed">
+                  <p className="text-[10px] text-gray-400 mt-2 text-center leading-relaxed font-medium">
                     If Google Sign-In is blocked inside your sandbox preview iFrame, click <strong>Continue in Guest Mode</strong> above to format and reconstruct documents offline.
                   </p>
                 </div>
               </div>
             </motion.div>
           ) : (
-            /* DUAL PANE WORKSPACE */
+            /* SINGLE-PANE TABBED WORKSPACE */
             <motion.div 
               key="workspace-view"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ duration: 0.3 }}
-              className="grid grid-cols-1 lg:grid-cols-12 gap-8"
+              transition={{ duration: 0.25 }}
+              className="w-full z-10 flex flex-col gap-6"
             >
-              {/* Left Grid Sidebar: Upload, Select, History (5 Columns) */}
-              <div className="lg:col-span-4 flex flex-col gap-6">
-                
-                {/* Uploader Card */}
-                <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-                  <h3 className="font-display font-semibold text-gray-950 text-base mb-3 flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-indigo-600" />
-                    Reconstruct Scanned PDF
-                  </h3>
-                  
-                  <div
-                    id="drop-zone"
-                    onDragEnter={handleDrag}
-                    onDragOver={handleDrag}
-                    onDragLeave={handleDrag}
-                    onDrop={handleDrop}
-                    onClick={triggerBrowse}
-                    className={`border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer flex flex-col items-center justify-center min-h-[140px] ${
-                      dragActive 
-                        ? 'border-indigo-600 bg-indigo-50/50' 
-                        : 'border-gray-200 hover:border-indigo-400 hover:bg-gray-50/50'
-                    }`}
-                  >
-                    <input 
-                      type="file" 
-                      ref={fileInputRef} 
-                      onChange={handleFileChange} 
-                      className="hidden" 
-                      accept=".pdf"
-                    />
-                    <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-full mb-2">
-                      <UploadCloud className="w-5 h-5" />
-                    </div>
-                    <p className="text-xs font-semibold text-gray-800">
-                      {selectedFile ? 'Change scanned PDF' : 'Select Case Diary PDF'}
-                    </p>
-                    <p className="text-[10px] text-gray-400 mt-0.5">
-                      {selectedFile ? selectedFile.name : 'Drag & drop or select file'}
-                    </p>
-                  </div>
-
-                  {/* Extraction Method Toggle */}
-                  <div className="mt-3 bg-gray-50 border border-gray-150 rounded-xl p-2.5">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Extraction Method</span>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setExtractionMode('free')}
-                        className={`p-2 rounded-lg text-left transition-all cursor-pointer ${
-                          extractionMode === 'free'
-                            ? 'bg-white text-indigo-600 shadow-sm border border-gray-150'
-                            : 'text-gray-500 hover:text-gray-800 border border-transparent'
-                        }`}
-                      >
-                        <p className="text-[11px] font-bold flex items-center gap-1">
-                          <Check className={`w-3 h-3 ${extractionMode === 'free' ? 'text-indigo-600' : 'text-transparent'}`} />
-                          Unlimited Free
-                        </p>
-                        <p className="text-[8.5px] text-gray-400 mt-0.5 ml-4 leading-normal font-medium">Local Browser OCR. Perfect for large files.</p>
-                      </button>
-                      
-                      <button
-                        type="button"
-                        onClick={() => setExtractionMode('direct')}
-                        className={`p-2 rounded-lg text-left transition-all cursor-pointer ${
-                          extractionMode === 'direct'
-                            ? 'bg-white text-indigo-600 shadow-sm border border-gray-150'
-                            : 'text-gray-500 hover:text-gray-800 border border-transparent'
-                        }`}
-                      >
-                        <p className="text-[11px] font-bold flex items-center gap-1">
-                          <Check className={`w-3 h-3 ${extractionMode === 'direct' ? 'text-indigo-600' : 'text-transparent'}`} />
-                          Cloud Upload
-                        </p>
-                        <p className="text-[8.5px] text-gray-400 mt-0.5 ml-4 leading-normal font-medium">Direct Gemini. Max 4.5MB on Vercel.</p>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Run Analysis Action */}
-                  {selectedFile && !isExtracting && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 5 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="mt-3.5"
+              {activeTab === 'gateway' && (
+                <div className="max-w-2xl mx-auto w-full flex flex-col gap-6">
+                  {/* Uploader Card */}
+                  <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm">
+                    <h3 className="font-display font-semibold text-gray-950 text-base mb-3 flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-indigo-600" />
+                      Reconstruct Scanned PDF
+                    </h3>
+                    
+                    <div
+                      id="drop-zone"
+                      onDragEnter={handleDrag}
+                      onDragOver={handleDrag}
+                      onDragLeave={handleDrag}
+                      onDrop={handleDrop}
+                      onClick={triggerBrowse}
+                      className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer flex flex-col items-center justify-center min-h-[160px] ${
+                        dragActive 
+                          ? 'border-indigo-600 bg-indigo-50/50' 
+                          : 'border-gray-200 hover:border-indigo-400 hover:bg-gray-50/50'
+                      }`}
                     >
-                      <button
-                        id="start-convert-btn"
-                        onClick={runExtraction}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-xl text-xs font-semibold shadow-sm hover:shadow transition-all flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <Sparkles className="w-4 h-4" />
-                        AI Reconstruct & Format layout
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </motion.div>
-                  )}
-
-                  {conversionError && (
-                    <div className="mt-3.5 p-3 bg-red-50 border border-red-100 text-red-700 text-[11px] rounded-xl flex gap-2">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      <span>{conversionError}</span>
-                    </div>
-                  )}
-
-                  {/* Active Reconstructing Indicator with State-of-the-art Progress Bar */}
-                  {isExtracting && (
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.98 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="mt-4 p-5 border border-indigo-100 bg-indigo-50/15 rounded-2xl shadow-[0_4px_20px_rgba(79,70,229,0.05)] flex flex-col gap-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <RefreshCw className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
-                          <span className="text-xs font-bold text-gray-950">AI Reconstruction Pipeline</span>
-                        </div>
-                        <span className="text-xs font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
-                          {extractionProgress}%
-                        </span>
+                      <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        onChange={handleFileChange} 
+                        className="hidden" 
+                        accept=".pdf"
+                      />
+                      <div className="p-3 bg-indigo-50 text-indigo-600 rounded-full mb-3 shadow-xs">
+                        <UploadCloud className="w-6 h-6" />
                       </div>
+                      <p className="text-xs font-semibold text-gray-800">
+                        {selectedFile ? 'Change scanned PDF' : 'Select Case Diary PDF'}
+                      </p>
+                      <p className="text-[10px] text-gray-400 mt-1 font-mono">
+                        {selectedFile ? selectedFile.name : 'Drag & drop or click to browse'}
+                      </p>
+                    </div>
 
-                      {/* Animated Progress Bar Track */}
-                      <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden relative border border-gray-200/50">
-                        <motion.div 
-                          className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full relative"
-                          initial={{ width: '0%' }}
-                          animate={{ width: `${extractionProgress}%` }}
-                          transition={{ duration: 0.3, ease: "easeOut" }}
+                    {/* Extraction Method Toggle */}
+                    <div className="mt-4 bg-gray-50/50 border border-gray-150 rounded-2xl p-3">
+                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-2">Extraction Mode</span>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setExtractionMode('free')}
+                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
+                            extractionMode === 'free'
+                              ? 'bg-white text-indigo-600 shadow-xs border-indigo-100'
+                              : 'text-gray-500 hover:text-gray-800 border-transparent bg-transparent'
+                          }`}
                         >
-                          <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.15)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.15)_50%,rgba(255,255,255,0.15)_75%,transparent_75%,transparent)] bg-[length:1rem_1rem] animate-[shimmer_1s_linear_infinite]" />
-                        </motion.div>
-                      </div>
-
-                      {/* Current Step Description */}
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-semibold text-gray-800 transition-all duration-300">
-                          {extractionStep}
-                        </p>
-                        <p className="text-[9px] text-gray-400 mt-1 leading-normal">
-                          Analyzing layouts, handwritings, and formatting police case diaries securely.
-                        </p>
-                      </div>
-
-                      {/* Live Terminal Log Stream (Coding Flow Style) */}
-                      {extractionLogs.length > 0 && (
-                        <div className="mt-1 flex flex-col">
-                          <div className="flex items-center justify-between px-1.5 pb-1 text-[8.5px] font-bold text-gray-400 uppercase tracking-wider">
-                            <span>Live Execution Terminal</span>
-                            <span className="flex items-center gap-1 text-emerald-500 font-semibold">
-                              <span className="w-1 h-1 bg-emerald-500 rounded-full animate-ping"></span>
-                              Active Stream
-                            </span>
-                          </div>
-                          <div 
-                            ref={logsEndRef}
-                            className="bg-slate-950 rounded-xl p-3 border border-slate-900 font-mono text-[9px] leading-relaxed text-slate-300 max-h-[140px] overflow-y-auto shadow-inner flex flex-col gap-1 select-none"
-                            style={{ scrollBehavior: 'smooth' }}
-                          >
-                            {extractionLogs.map((log, index) => {
-                              let colorClass = 'text-slate-300';
-                              if (log.includes('[SYSTEM]')) colorClass = 'text-sky-400';
-                              else if (log.includes('[OCR]')) colorClass = 'text-fuchsia-400';
-                              else if (log.includes('[AI]')) colorClass = 'text-amber-400';
-                              else if (log.includes('[RECONSTRUCT]')) colorClass = 'text-indigo-400';
-                              else if (log.includes('[SUCCESS]')) colorClass = 'text-emerald-400 font-semibold';
-                              else if (log.includes('[ERROR]')) colorClass = 'text-rose-400 font-semibold';
-
-                              return (
-                                <div key={index} className={`whitespace-pre-wrap break-all ${colorClass}`}>
-                                  {log}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
-                </div>
-
-                {/* Tabbed Record Selector & Database Library */}
-                <div className="bg-white border border-gray-200/95 rounded-3xl p-6 shadow-[0_4px_30px_rgba(0,0,0,0.02)] flex-1 flex flex-col min-h-[420px]">
-                  {/* Tab Headers */}
-                  <div className="flex items-center border-b border-gray-100 mb-4 bg-gray-50/60 p-1 rounded-xl gap-0.5">
-                    <button
-                      onClick={() => setSidebarTab('workspace')}
-                      className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer ${
-                        sidebarTab === 'workspace'
-                          ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
-                          : 'text-gray-500 hover:text-gray-800'
-                      }`}
-                    >
-                      <Layers className="w-3 h-3" />
-                      Workspace ({diaries.length})
-                    </button>
-                    <button
-                      onClick={() => setSidebarTab('history')}
-                      className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer relative ${
-                        sidebarTab === 'history'
-                          ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
-                          : 'text-gray-500 hover:text-gray-800'
-                      }`}
-                    >
-                      <Sparkles className="w-3 h-3 text-indigo-500 shrink-0" />
-                      Supabase Cloud DB ({savedDatabases.length})
-                      {supabaseStatus?.isConfigured && (
-                        <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                      )}
-                    </button>
-                  </div>
-
-                  {sidebarTab === 'workspace' && (
-                    <div className="flex-1 flex flex-col">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-display font-semibold text-gray-900 text-xs flex items-center gap-1.5">
-                          <ListFilter className="w-3.5 h-3.5 text-indigo-600" />
-                          Reconstructed Records
-                        </h3>
+                          <p className="text-xs font-bold flex items-center gap-1">
+                            <Check className={`w-3.5 h-3.5 ${extractionMode === 'free' ? 'text-indigo-650 font-bold' : 'text-transparent'}`} />
+                            Unlimited Free
+                          </p>
+                          <p className="text-[9px] text-gray-400 mt-1 ml-4 leading-normal font-medium">Local Browser OCR. Perfect for huge files.</p>
+                        </button>
                         
-                        {diaries.length > 0 && (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={handleMarkAllAsSaved}
-                              className="text-[9px] text-indigo-600 hover:text-indigo-800 bg-indigo-50/70 hover:bg-indigo-100/80 font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer"
-                              title="Mark all current cases as saved drafts"
-                            >
-                              Mark Saved
-                            </button>
-                            <button
-                              onClick={() => {
-                                const firstDiary = diaries[0];
-                                const crimeNo = (firstDiary.crNoAndSecOfLaw || 'Diary').split(',')[0].replace(/[\/\\?%*:|"<>]/g, '-').trim();
-                                const station = firstDiary.policeStation || 'Record';
-                                setDbNameInput(`Database - CR No ${crimeNo} - ${station}`);
-                                setShowSaveDbPrompt(true);
-                              }}
-                              className="text-[9px] text-purple-600 hover:text-purple-800 bg-purple-50/70 hover:bg-purple-100/80 font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer flex items-center gap-0.5"
-                              title="Save this entire set to Database"
-                            >
-                              <Save className="w-2.5 h-2.5" />
-                              Save DB
-                            </button>
-                          </div>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => setExtractionMode('direct')}
+                          className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
+                            extractionMode === 'direct'
+                              ? 'bg-white text-indigo-600 shadow-xs border-indigo-100'
+                              : 'text-gray-500 hover:text-gray-800 border-transparent bg-transparent'
+                          }`}
+                        >
+                          <p className="text-xs font-bold flex items-center gap-1">
+                            <Check className={`w-3.5 h-3.5 ${extractionMode === 'direct' ? 'text-indigo-650 font-bold' : 'text-transparent'}`} />
+                            Cloud Upload
+                          </p>
+                          <p className="text-[9px] text-gray-400 mt-1 ml-4 leading-normal font-medium">Direct Gemini. Max 4.5MB on Vercel.</p>
+                        </button>
                       </div>
+                    </div>
 
-                      {diaries.length > 0 && (
-                        <div className="relative mb-3.5">
-                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                            <Search className="w-3.5 h-3.5" />
+                    {/* Run Analysis Action */}
+                    {selectedFile && !isExtracting && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mt-4"
+                      >
+                        <button
+                          id="start-convert-btn"
+                          onClick={runExtraction}
+                          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 px-4 rounded-2xl text-xs font-semibold shadow-xs hover:shadow transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <Sparkles className="w-4 h-4" />
+                          AI Reconstruct & Format layout
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </motion.div>
+                    )}
+
+                    {conversionError && (
+                      <div className="mt-4 p-3 bg-red-50 border border-red-100 text-red-700 text-xs rounded-xl flex gap-2.5">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>{conversionError}</span>
+                      </div>
+                    )}
+
+                    {/* Active Reconstructing Indicator with State-of-the-art Progress Bar */}
+                    {isExtracting && (
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.98 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="mt-4 p-5 border border-indigo-100 bg-indigo-50/15 rounded-2xl shadow-[0_4px_20px_rgba(79,70,229,0.05)] flex flex-col gap-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <RefreshCw className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
+                            <span className="text-xs font-bold text-gray-950">AI Reconstruction Pipeline</span>
                           </div>
-                          <input
-                            type="text"
-                            placeholder="Search by Crime No. or Station..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-8 pr-4 py-1.5 bg-gray-50 hover:bg-gray-100/50 focus:bg-white border border-gray-200/80 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg text-xs text-gray-900 placeholder-gray-400 font-medium transition-all"
-                          />
-                          {searchQuery && (
-                            <button
-                              onClick={() => setSearchQuery('')}
-                              className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-gray-400 hover:text-gray-600 font-bold cursor-pointer"
-                            >
-                              ✕
-                            </button>
-                          )}
+                          <span className="text-xs font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
+                            {extractionProgress}%
+                          </span>
                         </div>
-                      )}
 
-                      {diaries.length === 0 ? (
-                        <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-gray-50/50 rounded-2xl border border-gray-100 min-h-[250px]">
-                          <FileText className="w-8 h-8 text-gray-300 mb-2" />
-                          <p className="text-xs font-semibold text-gray-500">No documents loaded</p>
-                          <p className="text-[10px] text-gray-400 mt-1 max-w-[190px] leading-relaxed">
-                            Upload your scanned police case diary PDF above to begin formatting layout translation.
+                        {/* Animated Progress Bar Track */}
+                        <div className="w-full h-2.5 bg-gray-150 rounded-full overflow-hidden relative border border-gray-200/50">
+                          <motion.div 
+                            className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full relative"
+                            initial={{ width: '0%' }}
+                            animate={{ width: `${extractionProgress}%` }}
+                            transition={{ duration: 0.3, ease: "easeOut" }}
+                          >
+                            <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.15)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.15)_50%,rgba(255,255,255,0.15)_75%,transparent_75%,transparent)] bg-[length:1rem_1rem] animate-[shimmer_1s_linear_infinite]" />
+                          </motion.div>
+                        </div>
+
+                        {/* Current Step Description */}
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold text-gray-800 transition-all duration-300">
+                            {extractionStep}
+                          </p>
+                          <p className="text-[9px] text-gray-400 mt-1 leading-normal font-medium">
+                            Analyzing layouts, handwritings, and formatting police case diaries securely.
                           </p>
                         </div>
-                      ) : (
-                        <>
-                          {/* Filtered list based on searchQuery */}
-                          <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 flex-1">
-                            {diaries
-                              .filter((diary) => {
+
+                        {/* Live Terminal Log Stream (Coding Flow Style) */}
+                        {extractionLogs.length > 0 && (
+                          <div className="mt-1 flex flex-col">
+                            <div className="flex items-center justify-between px-1.5 pb-1 text-[8.5px] font-bold text-gray-400 uppercase tracking-wider">
+                              <span>Live Execution Terminal</span>
+                              <span className="flex items-center gap-1 text-emerald-500 font-semibold">
+                                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span>
+                                Active Stream
+                              </span>
+                            </div>
+                            <div 
+                              ref={logsEndRef}
+                              className="bg-slate-950 rounded-2xl p-4 border border-slate-900 font-mono text-[9px] leading-relaxed text-slate-300 max-h-[140px] overflow-y-auto shadow-inner flex flex-col gap-1 select-none"
+                              style={{ scrollBehavior: 'smooth' }}
+                            >
+                              {extractionLogs.map((log, index) => {
+                                let colorClass = 'text-slate-300';
+                                if (log.includes('[SYSTEM]')) colorClass = 'text-sky-400';
+                                else if (log.includes('[OCR]')) colorClass = 'text-fuchsia-400';
+                                else if (log.includes('[AI]')) colorClass = 'text-amber-400';
+                                else if (log.includes('[RECONSTRUCT]')) colorClass = 'text-indigo-400';
+                                else if (log.includes('[SUCCESS]')) colorClass = 'text-emerald-400 font-semibold';
+                                else if (log.includes('[ERROR]')) colorClass = 'text-rose-400 font-semibold';
+
+                                return (
+                                  <div key={index} className={`whitespace-pre-wrap break-all ${colorClass}`}>
+                                    {log}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'records' && (
+                <div className="max-w-3xl mx-auto w-full flex flex-col gap-6">
+                  {/* Tabbed Record Selector & Database Library */}
+                  <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-[0_4px_30px_rgba(0,0,0,0.02)] flex-1 flex flex-col min-h-[420px]">
+                    {/* Tab Headers */}
+                    <div className="flex items-center border-b border-gray-150 mb-4 bg-gray-50/60 p-1.5 rounded-xl gap-0.5">
+                      <button
+                        onClick={() => setSidebarTab('workspace')}
+                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                          sidebarTab === 'workspace'
+                            ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
+                            : 'text-gray-500 hover:text-gray-800'
+                        }`}
+                      >
+                        <Layers className="w-3.5 h-3.5" />
+                        Workspace ({diaries.length})
+                      </button>
+                      <button
+                        onClick={() => setSidebarTab('history')}
+                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer relative ${
+                          sidebarTab === 'history'
+                            ? 'bg-white text-indigo-700 shadow-xs border border-gray-200/40'
+                            : 'text-gray-500 hover:text-gray-800'
+                        }`}
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                        Supabase Cloud DB ({savedDatabases.length})
+                        {supabaseStatus?.isConfigured && (
+                          <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                        )}
+                      </button>
+                    </div>
+
+                    {sidebarTab === 'workspace' && (
+                      <div className="flex-1 flex flex-col">
+                        <div className="flex items-center justify-between mb-3.5">
+                          <h3 className="font-display font-semibold text-gray-900 text-xs flex items-center gap-1.5">
+                            <ListFilter className="w-3.5 h-3.5 text-indigo-600" />
+                            Reconstructed Records
+                          </h3>
+                          
+                          {diaries.length > 0 && (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={handleMarkAllAsSaved}
+                                className="text-[9px] text-indigo-600 hover:text-indigo-800 bg-indigo-50/70 hover:bg-indigo-100/80 font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer"
+                                title="Mark all current cases as saved drafts"
+                              >
+                                Mark Saved
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const firstDiary = diaries[0];
+                                  const crimeNo = (firstDiary.crNoAndSecOfLaw || 'Diary').split(',')[0].replace(/[\/\\?%*:|"<>]/g, '-').trim();
+                                  const station = firstDiary.policeStation || 'Record';
+                                  setDbNameInput(`Database - CR No ${crimeNo} - ${station}`);
+                                  setShowSaveDbPrompt(true);
+                                }}
+                                className="text-[9px] text-purple-605 hover:text-purple-800 bg-purple-50/70 hover:bg-purple-100/80 font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer flex items-center gap-0.5"
+                                title="Save this entire set to Database"
+                              >
+                                <Save className="w-2.5 h-2.5" />
+                                Save DB
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {diaries.length > 0 && (
+                          <div className="relative mb-3.5">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                              <Search className="w-3.5 h-3.5" />
+                            </div>
+                            <input
+                              type="text"
+                              placeholder="Search by Crime No. or Station..."
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              className="w-full pl-8 pr-4 py-1.5 bg-gray-55 hover:bg-gray-100/50 focus:bg-white border border-gray-200/80 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg text-xs text-gray-900 placeholder-gray-400 font-medium transition-all"
+                            />
+                            {searchQuery && (
+                              <button
+                                onClick={() => setSearchQuery('')}
+                                className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-gray-400 hover:text-gray-600 font-bold cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {diaries.length === 0 ? (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-gray-50/50 rounded-2xl border border-gray-100 min-h-[250px]">
+                            <FileText className="w-8 h-8 text-gray-300 mb-2" />
+                            <p className="text-xs font-semibold text-gray-500">No documents loaded</p>
+                            <p className="text-[10px] text-gray-400 mt-1 max-w-[190px] leading-relaxed">
+                              Upload your scanned police case diary PDF under <strong>Gateway Terminal</strong> tab to begin reconstruction.
+                            </p>
+                          </div>
+                        ) : (
+                          <>
+                            {/* Filtered list based on searchQuery */}
+                            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 flex-1">
+                              {diaries
+                                .filter((diary) => {
+                                  const query = searchQuery.toLowerCase().trim();
+                                  if (!query) return true;
+                                  return (
+                                    (diary.crNoAndSecOfLaw || '').toLowerCase().includes(query) ||
+                                    (diary.policeStation || '').toLowerCase().includes(query) ||
+                                    (diary.district || '').toLowerCase().includes(query) ||
+                                    (diary.dateOfCd || '').toLowerCase().includes(query)
+                                  );
+                                })
+                                .map((diary) => {
+                                  const isSelected = selectedDiaryId === diary.id;
+                                  return (
+                                    <div
+                                      key={diary.id}
+                                      className={`w-full rounded-2xl border transition-all flex items-center p-3 gap-2.5 cursor-pointer ${
+                                        isSelected 
+                                          ? 'border-indigo-300 bg-indigo-50/30 shadow-xs' 
+                                          : 'border-gray-100 bg-gray-55/10 hover:bg-gray-50/50'
+                                      }`}
+                                      onClick={() => {
+                                        setSelectedDiaryId(diary.id);
+                                        setActiveTab('editor');
+                                      }}
+                                    >
+                                      <div className={`p-2 rounded-xl shrink-0 ${isSelected ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100/85 text-gray-400'}`}>
+                                        <FileText className="w-4 h-4" />
+                                      </div>
+                                      
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-1.5 justify-between">
+                                          <p className="text-xs font-semibold text-gray-900 truncate">
+                                            {diary.crNoAndSecOfLaw || 'Case Diary Entry'}
+                                          </p>
+                                          
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            {/* Delete record from workspace */}
+                                            <button
+                                              onClick={(e) => handleDeleteWorkspaceDiary(diary.id, e)}
+                                              className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                              title="Delete record from active workspace"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+
+                                            {/* Small circle checkbox indicator for Saved status */}
+                                            <button
+                                              onClick={(e) => handleToggleSavedDraft(diary.id, e)}
+                                              className={`p-1 rounded-full border transition-all ${
+                                                diary.isSavedDraft
+                                                  ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-200'
+                                                  : 'bg-white border-gray-200 text-gray-300 hover:border-indigo-350 hover:text-indigo-650'
+                                              }`}
+                                              title={diary.isSavedDraft ? "Saved Draft (Click to toggle)" : "Unsaved Draft (Click to save)"}
+                                            >
+                                              <Check className="w-3 h-3" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-gray-400">
+                                          <span className="font-medium truncate">{diary.policeStation}</span>
+                                          <span>•</span>
+                                          <span className="font-semibold text-indigo-600">{diary.dateOfCd}</span>
+                                        </div>
+                                      </div>
+                                      <ChevronRight className={`w-4 h-4 transition-transform shrink-0 ${isSelected ? 'text-indigo-600 translate-x-0.5' : 'text-gray-300'}`} />
+                                    </div>
+                                  );
+                                })}
+                                
+                              {diaries.filter((diary) => {
                                 const query = searchQuery.toLowerCase().trim();
                                 if (!query) return true;
                                 return (
@@ -1530,899 +1802,924 @@ export default function App() {
                                   (diary.district || '').toLowerCase().includes(query) ||
                                   (diary.dateOfCd || '').toLowerCase().includes(query)
                                 );
-                              })
-                              .map((diary) => {
-                                const isSelected = selectedDiaryId === diary.id;
-                                return (
-                                  <div
-                                    key={diary.id}
-                                    className={`w-full rounded-2xl border transition-all flex items-center p-3 gap-2.5 cursor-pointer ${
-                                      isSelected 
-                                        ? 'border-indigo-300 bg-indigo-50/30 shadow-xs' 
-                                        : 'border-gray-100 bg-gray-50/10 hover:bg-gray-50'
-                                    }`}
-                                    onClick={() => setSelectedDiaryId(diary.id)}
-                                  >
-                                    <div className={`p-2 rounded-xl shrink-0 ${isSelected ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100/80 text-gray-400'}`}>
-                                      <FileText className="w-4 h-4" />
-                                    </div>
-                                    
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-1.5 justify-between">
-                                        <p className="text-xs font-semibold text-gray-900 truncate">
-                                          {diary.crNoAndSecOfLaw || 'Case Diary Entry'}
-                                        </p>
-                                        
-                                        <div className="flex items-center gap-1 shrink-0">
-                                          {/* Delete record from workspace */}
-                                          <button
-                                            onClick={(e) => handleDeleteWorkspaceDiary(diary.id, e)}
-                                            className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                                            title="Delete record from active workspace"
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                          </button>
-
-                                          {/* Small circle checkbox indicator for Saved status */}
-                                          <button
-                                            onClick={(e) => handleToggleSavedDraft(diary.id, e)}
-                                            className={`p-1 rounded-full border transition-all ${
-                                              diary.isSavedDraft
-                                                ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-200'
-                                                : 'bg-white border-gray-200 text-gray-300 hover:border-indigo-300 hover:text-indigo-600'
-                                            }`}
-                                            title={diary.isSavedDraft ? "Saved Draft (Click to toggle)" : "Unsaved Draft (Click to save)"}
-                                          >
-                                            <Check className="w-3 h-3" />
-                                          </button>
-                                        </div>
-                                      </div>
-                                      
-                                      <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-gray-400">
-                                        <span className="font-medium truncate">{diary.policeStation}</span>
-                                        <span>•</span>
-                                        <span className="font-semibold text-indigo-600">{diary.dateOfCd}</span>
-                                      </div>
-                                    </div>
-                                    <ChevronRight className={`w-4 h-4 transition-transform shrink-0 ${isSelected ? 'text-indigo-600 translate-x-0.5' : 'text-gray-300'}`} />
-                                  </div>
-                                );
-                              })}
-                              
-                            {diaries.filter((diary) => {
-                              const query = searchQuery.toLowerCase().trim();
-                              if (!query) return true;
-                              return (
-                                (diary.crNoAndSecOfLaw || '').toLowerCase().includes(query) ||
-                                (diary.policeStation || '').toLowerCase().includes(query) ||
-                                (diary.district || '').toLowerCase().includes(query) ||
-                                (diary.dateOfCd || '').toLowerCase().includes(query)
-                              );
-                            }).length === 0 && (
-                              <p className="text-center text-xs text-gray-400 py-6 font-medium italic">No matches for "{searchQuery}"</p>
-                            )}
-                          </div>
-
-                          {/* Bulk Export Section (Beautiful MD3 Card) */}
-                          <div className="mt-4 pt-3.5 border-t border-gray-100 bg-indigo-50/15 p-3 rounded-2xl border border-indigo-100/50">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Bulk Export Status</span>
-                              <span className="px-2.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded-full">
-                                {diaries.filter(d => d.isSavedDraft).length} / {diaries.length} Saved
-                              </span>
-                            </div>
-                            
-                            <button
-                              onClick={handleBulkExportZip}
-                              disabled={isBulkExporting}
-                              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
-                            >
-                              {isBulkExporting ? (
-                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <FileDown className="w-3.5 h-3.5" />
+                              }).length === 0 && (
+                                <p className="text-center text-xs text-gray-400 py-6 font-medium italic">No matches for "{searchQuery}"</p>
                               )}
-                              Bulk Export Saved Drafts (.ZIP)
+                            </div>
+
+                            {/* Bulk Export Section */}
+                            <div className="mt-4 pt-3.5 border-t border-gray-100 bg-indigo-50/15 p-3.5 rounded-2xl border border-indigo-100/50">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Bulk Export Status</span>
+                                <span className="px-2.5 py-0.5 bg-green-105 text-green-700 border border-green-200/55 text-[10px] font-bold rounded-full">
+                                  {diaries.filter(d => d.isSavedDraft).length} / {diaries.length} Saved
+                                </span>
+                              </div>
+                              
+                              <button
+                                onClick={handleBulkExportZip}
+                                disabled={isBulkExporting}
+                                className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 text-white disabled:text-gray-400 py-2.5 px-4 rounded-xl text-xs font-semibold shadow-xs hover:shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                              >
+                                {isBulkExporting ? (
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <FileDown className="w-3.5 h-3.5" />
+                                )}
+                                Bulk Export Saved Drafts (.ZIP)
+                              </button>
+                              <p className="text-[9px] text-gray-400 mt-1.5 text-center leading-normal">
+                                Only case diaries with completed draft saves will be included in the exported ZIP archive.
+                              </p>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {sidebarTab === 'history' && (
+                      <div className="flex-1 flex flex-col">
+                        {/* Connection Status Indicator */}
+                        <div className="flex items-center justify-between mb-3 bg-gray-55/75 p-2.5 rounded-xl border border-gray-150">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                            <span className="text-[10px] font-bold text-gray-700 truncate">
+                              {supabaseStatus?.isConfigured ? 'Supabase Connected' : 'Supabase Offline'}
+                            </span>
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-400'}`} />
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => setActiveTab('dashboard')}
+                              className="text-[9.5px] font-bold text-indigo-650 hover:text-indigo-850 px-1.5 py-0.5 rounded transition-all cursor-pointer hover:bg-white"
+                            >
+                              Show Setup
                             </button>
-                            <p className="text-[9px] text-gray-400 mt-1.5 text-center leading-normal">
-                              Only case diaries with completed draft saves will be included in the exported ZIP archive.
+                            <button
+                              onClick={fetchSupabaseStatus}
+                              disabled={isLoadingSupaStatus}
+                              className="p-1 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-gray-800 disabled:opacity-50 cursor-pointer"
+                              title="Refresh connection status"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {isLoadingDbs ? (
+                          <div className="flex-1 flex flex-col items-center justify-center py-10">
+                            <RefreshCw className="w-6 h-6 text-indigo-600 animate-spin mb-2" />
+                            <p className="text-xs font-semibold text-gray-500">Loading your database library...</p>
+                          </div>
+                        ) : !supabaseStatus?.isConfigured ? (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-amber-50/20 rounded-2xl border border-amber-100/50 min-h-[255px]">
+                            <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse mb-2" />
+                            <p className="text-xs font-bold text-indigo-950">Cloud Database Unconfigured</p>
+                            <p className="text-[10px] text-indigo-700/80 mt-1 max-w-[210px] leading-relaxed font-medium">
+                              Define VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your settings to unlock persistent cloud storage.
+                            </p>
+                            <button
+                              onClick={() => setActiveTab('dashboard')}
+                              className="mt-3.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-all shadow-xs"
+                            >
+                              Configure Database
+                            </button>
+                          </div>
+                        ) : savedDatabases.length === 0 ? (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-gray-50/50 rounded-2xl border border-gray-100 min-h-[250px]">
+                            <Database className="w-8 h-8 text-gray-300 mb-2" />
+                            <p className="text-xs font-semibold text-gray-500">No Databases Stored on Cloud</p>
+                            <p className="text-[10px] text-gray-400 mt-1 max-w-[210px] leading-relaxed">
+                              Once you load and reconstruct a scanned PDF in the workspace, click <strong>"Save DB"</strong> to persist it.
                             </p>
                           </div>
-                        </>
-                      )}
+                        ) : (
+                          <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1 flex-1">
+                            {savedDatabases.map((dbItem) => {
+                              const isExpanded = selectedSavedDbId === dbItem.id;
+                              const formattedDate = new Date(dbItem.createdAt).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              });
+                              
+                              return (
+                                <div 
+                                  key={dbItem.id} 
+                                  className={`border rounded-xl transition-all ${
+                                    isExpanded 
+                                      ? 'border-indigo-200 bg-indigo-50/15 shadow-xs' 
+                                      : 'border-gray-100 bg-white hover:bg-gray-50/30'
+                                  }`}
+                                >
+                                  {/* Database Header (Clickable to toggle expand) */}
+                                  <div 
+                                    onClick={() => setSelectedSavedDbId(isExpanded ? null : dbItem.id)}
+                                    className="p-3 flex items-center justify-between cursor-pointer gap-2"
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <h4 className="text-xs font-bold text-gray-955 truncate flex items-center gap-1.5">
+                                        <Database className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                        {dbItem.name}
+                                      </h4>
+                                      <p className="text-[9px] text-gray-400 mt-0.5 font-medium">{formattedDate} • {dbItem.diaries.length} records</p>
+                                    </div>
+                                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180 text-indigo-600' : ''}`} />
+                                  </div>
+
+                                  {/* Expanded content */}
+                                  {isExpanded && (
+                                    <div className="px-3 pb-3 border-t border-gray-100 bg-gray-50/20 pt-2.5 rounded-b-xl">
+                                      {/* Action row */}
+                                      <div className="grid grid-cols-2 gap-2 mb-3">
+                                        <button
+                                          onClick={() => handleViewDatabaseDraft(dbItem)}
+                                          className="bg-indigo-650 hover:bg-indigo-755 text-white text-[10px] font-bold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all"
+                                        >
+                                          <Eye className="w-3.5 h-3.5" />
+                                          View Draft
+                                        </button>
+                                        <button
+                                          onClick={() => handleDownloadAllDocx(dbItem.diaries, dbItem.name)}
+                                          className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-[10px] font-semibold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all"
+                                        >
+                                          <FileDown className="w-3.5 h-3.5 text-gray-400" />
+                                          Export Word
+                                        </button>
+                                      </div>
+
+                                      {/* Cases List */}
+                                      <div className="space-y-1.5">
+                                        <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Extracted Case Numbers</p>
+                                        {dbItem.diaries.map((diary) => (
+                                          <div 
+                                            key={diary.id} 
+                                            className="flex items-center justify-between p-2 bg-white border border-gray-100 rounded-lg gap-2 hover:border-indigo-100 transition-all"
+                                          >
+                                            <div className="min-w-0 flex-1">
+                                              <p className="text-[10px] font-bold text-gray-800 truncate">{diary.crNoAndSecOfLaw || 'Case Record'}</p>
+                                              <p className="text-[8px] text-gray-400 truncate">{diary.policeStation}</p>
+                                            </div>
+                                            <div className="flex items-center gap-1.5 shrink-0">
+                                              <span className="text-[8px] font-bold text-indigo-600 bg-indigo-50/50 px-1.5 py-0.5 rounded-md">{diary.dateOfCd}</span>
+                                              
+                                              {/* Edit individual record button */}
+                                              <button
+                                                onClick={(e) => handleEditDiaryFromDatabase(dbItem, diary.id, e)}
+                                                className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                                                title="Edit individual case record in workspace"
+                                              >
+                                                <Edit3 className="w-3 h-3" />
+                                              </button>
+
+                                              {/* Delete individual record button */}
+                                              <button
+                                                onClick={(e) => handleDeleteDiaryFromDatabase(dbItem.id, diary.id, e)}
+                                                className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                                title="Delete individual case record from database"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+
+                                      {/* Danger Zone */}
+                                      <div className="mt-3.5 pt-2 border-t border-gray-100 flex justify-end">
+                                        <button
+                                          onClick={() => handleDeleteDatabase(dbItem.id)}
+                                          className="text-[9px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-md transition-all flex items-center gap-1 cursor-pointer"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                          Delete DB
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'editor' && (
+                <div className="w-full flex flex-col gap-6">
+                  {/* Save to Database Banner Prompt */}
+                  {showSaveDbPrompt && diaries.length > 0 && (
+                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3 flex-1">
+                        <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl">
+                          <Database className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-bold text-gray-955 uppercase tracking-wide">Save Extracted Diaries as a Database</h4>
+                          <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Give this dataset a name to persist these case records securely in your Cloud library.</p>
+                          
+                          <div className="mt-3 max-w-md">
+                            <input
+                              type="text"
+                              value={dbNameInput}
+                              onChange={(e) => setDbNameInput(e.target.value)}
+                              placeholder="e.g. Case Diary - Vikiramangalam PS - 2026"
+                              className="w-full bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-sm"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-end">
+                        <button
+                          onClick={() => setShowSaveDbPrompt(false)}
+                          className="px-3.5 py-1.5 text-xs text-gray-500 hover:text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 font-semibold rounded-xl transition-all cursor-pointer shadow-xs"
+                        >
+                          Dismiss
+                        </button>
+                        <button
+                          onClick={handleSaveToDatabase}
+                          className="px-4 py-1.5 text-xs text-white bg-indigo-650 hover:bg-indigo-700 font-bold rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          Save Database
+                        </button>
+                      </div>
                     </div>
                   )}
 
-                  {sidebarTab === 'history' && (
-                    <div className="flex-1 flex flex-col">
-                      {/* Connection Status Indicator */}
-                      <div className="flex items-center justify-between mb-3 bg-gray-50/75 p-2 rounded-xl border border-gray-100">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                          <span className="text-[10px] font-bold text-gray-700 truncate">
-                            {supabaseStatus?.isConfigured ? 'Supabase Connected' : 'Supabase Offline'}
-                          </span>
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-400'}`} />
+                  {/* Database Save Status Feedback Notification */}
+                  {saveDbStatus.message && (
+                    <div className={`p-4 border rounded-2xl flex items-center gap-2.5 text-xs font-semibold shadow-xs ${
+                      saveDbStatus.type === 'success' 
+                        ? 'bg-green-50 border-green-100 text-green-700' 
+                        : saveDbStatus.type === 'error'
+                        ? 'bg-red-50 border-red-100 text-red-700'
+                        : 'bg-indigo-50 border-indigo-100 text-indigo-700'
+                    }`}>
+                      {saveDbStatus.type === 'loading' ? (
+                        <RefreshCw className="w-4 h-4 animate-spin shrink-0 text-indigo-600" />
+                      ) : saveDbStatus.type === 'success' ? (
+                        <Check className="w-4 h-4 shrink-0 text-green-600" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                      )}
+                      <span>{saveDbStatus.message}</span>
+                    </div>
+                  )}
+
+                  {activeDiary ? (
+                    <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm flex flex-col h-full min-h-[600px]">
+                      
+                      {/* Database active session indicator banner */}
+                      {loadedDbId && (
+                        <div className="mb-4 bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in">
+                          <div className="flex items-center gap-2">
+                            <Database className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <div>
+                              <p className="text-xs font-bold text-indigo-950">Active Database Session: <span className="underline">{loadedDbName}</span></p>
+                              <p className="text-[10px] text-indigo-700/80 font-medium">Any changes you make here can be synced directly back to your database library.</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={handleUpdateDatabase}
+                            className="bg-indigo-650 hover:bg-indigo-755 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            Sync Updates to DB
+                          </button>
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
+                      )}
+                      
+                      {/* Workspace Header Actions */}
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b border-gray-100">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 bg-green-50 text-green-700 text-[10px] font-bold rounded-md border border-green-200/50">VERIFIED PREVIEW</span>
+                            <span className="text-[10px] text-gray-400 font-semibold">{activeDiary.dateOfCd}</span>
+                          </div>
+                          <h2 className="font-display font-bold text-gray-955 text-lg mt-1">{activeDiary.crNoAndSecOfLaw}</h2>
+                          <p className="text-xs text-gray-400 font-medium">Reconstructed Case Diary • Station: {activeDiary.policeStation}</p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-stretch sm:self-auto justify-end">
                           <button
-                            onClick={() => setShowSupaSetup(!showSupaSetup)}
-                            className="text-[9px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline px-1.5 py-0.5 rounded transition-all cursor-pointer"
+                            id="save-draft-btn"
+                            onClick={saveWorkspaceChanges}
+                            className="border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
                           >
-                            {showSupaSetup ? 'Hide Setup' : 'Show Setup'}
+                            {isSaved ? (
+                              <>
+                                <Check className="w-4 h-4 text-green-600" />
+                                <span className="text-green-700">Changes Saved!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Save className="w-4 h-4 text-gray-400" />
+                                Save Draft
+                              </>
+                            )}
                           </button>
+
                           <button
-                            onClick={fetchSupabaseStatus}
-                            disabled={isLoadingSupaStatus}
-                            className="p-1 hover:bg-gray-200 rounded transition-colors text-gray-500 hover:text-gray-800 disabled:opacity-50 cursor-pointer"
-                            title="Refresh connection status"
+                            id="export-docx-btn"
+                            onClick={() => handleDownloadDocx(activeDiary)}
+                            className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                            title="Export the currently viewed case diary to Word"
                           >
-                            <RefreshCw className={`w-3 h-3 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
+                            <FileDown className="w-4 h-4 text-gray-400" />
+                            Export Case Word
                           </button>
+
+                          {diaries.length > 1 && (
+                            <button
+                              id="export-all-docx-btn"
+                              onClick={() => handleDownloadAllDocx(diaries, `Combined-Case-Diaries-${Date.now()}`)}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 px-4 rounded-xl flex items-center gap-2 cursor-pointer shadow-sm hover:shadow transition-all"
+                              title="Export all loaded case diaries combined into a single Word document"
+                            >
+                              <FileDown className="w-4 h-4" />
+                              Export Combined Word ({diaries.length})
+                            </button>
+                          )}
                         </div>
                       </div>
 
-                      {/* Setup Overlay Guide */}
-                      {showSupaSetup && (
-                        <div className="mb-4 p-3 rounded-xl border border-indigo-100 bg-indigo-50/20 space-y-3">
+                      {/* Interactive Case Diary Document Form */}
+                      <div className="space-y-6 mt-6 max-h-[680px] overflow-y-auto pr-1">
+                        
+                        {/* Section 1: Headers */}
+                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
+                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">I. Administration & Registry</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <OutlinedInput
+                              label="Police Station"
+                              value={activeDiary.policeStation}
+                              onChange={(e) => handleFieldChange('policeStation', e.target.value)}
+                              onClear={() => handleFieldChange('policeStation', '')}
+                            />
+                            <OutlinedInput
+                              label="District"
+                              value={activeDiary.district}
+                              onChange={(e) => handleFieldChange('district', e.target.value)}
+                              onClear={() => handleFieldChange('district', '')}
+                            />
+                            <OutlinedInput
+                              label="CR. No. & Sec of Law"
+                              value={activeDiary.crNoAndSecOfLaw}
+                              onChange={(e) => handleFieldChange('crNoAndSecOfLaw', e.target.value)}
+                              onClear={() => handleFieldChange('crNoAndSecOfLaw', '')}
+                            />
+                            <OutlinedInput
+                              label="Date of CD"
+                              value={activeDiary.dateOfCd}
+                              onChange={(e) => handleFieldChange('dateOfCd', e.target.value)}
+                              onClear={() => handleFieldChange('dateOfCd', '')}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Section 2: General parameters */}
+                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
+                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">II. Occurrence & Complainant Details</h4>
+                          <div className="space-y-4">
+                            <OutlinedTextarea
+                              label="Date, Time & Place of Occurrence"
+                              value={activeDiary.dateTimeAndPlaceOfOccurrence}
+                              onChange={(e) => handleFieldChange('dateTimeAndPlaceOfOccurrence', e.target.value)}
+                              rows={2}
+                            />
+                            <OutlinedInput
+                              label="Date of Report / Time"
+                              value={activeDiary.dateOfReportTime}
+                              onChange={(e) => handleFieldChange('dateOfReportTime', e.target.value)}
+                              onClear={() => handleFieldChange('dateOfReportTime', '')}
+                            />
+                            <OutlinedTextarea
+                              label="II. Complainant"
+                              value={activeDiary.complainant}
+                              onChange={(e) => handleFieldChange('complainant', e.target.value)}
+                              rows={2}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Section 3: Accused List Table */}
+                        <div className="p-4 border border-gray-200 rounded-xl space-y-3.5">
                           <div className="flex items-center justify-between">
-                            <h4 className="text-[10px] font-bold text-indigo-950 uppercase tracking-wider">Supabase Setup Guide</h4>
+                            <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">III. Accused Details</h4>
                             <button
-                              onClick={() => {
-                                const sqlText = supabaseStatus?.sqlSetup || `-- Create the case_databases table\nCREATE TABLE IF NOT EXISTS case_databases (\n  id TEXT PRIMARY KEY,\n  user_id TEXT NOT NULL,\n  name TEXT NOT NULL,\n  created_at BIGINT NOT NULL,\n  diaries JSONB NOT NULL DEFAULT '[]'::jsonb\n);\n\n-- Enable Row Level Security (RLS)\nALTER TABLE case_databases ENABLE ROW LEVEL SECURITY;\n\n-- Create policy to allow all users to select their own records\nCREATE POLICY "Allow select for user" ON case_databases\n  FOR SELECT USING (true);\n\n-- Create policy to allow all users to insert their own records\nCREATE POLICY "Allow insert for user" ON case_databases\n  FOR INSERT WITH CHECK (true);\n\n-- Create policy to allow all users to update their own records\nCREATE POLICY "Allow update for user" ON case_databases\n  FOR UPDATE USING (true);\n\n-- Create policy to allow all users to delete their own records\nCREATE POLICY "Allow delete for user" ON case_databases\n  FOR DELETE USING (true);`;
-                                navigator.clipboard.writeText(sqlText);
-                                alert("Setup SQL code copied to your clipboard!");
-                              }}
-                              className="text-[9px] text-white font-bold px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-700 transition-colors cursor-pointer"
+                              onClick={addAccusedRow}
+                              className="text-[10px] bg-indigo-50 text-indigo-650 hover:bg-indigo-100 font-bold px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors"
                             >
-                              Copy SQL
+                              <Plus className="w-3.5 h-3.5" />
+                              Add Accused
                             </button>
                           </div>
-                          
-                          <p className="text-[9px] text-indigo-900 leading-normal font-medium">
-                            {supabaseStatus?.isConfigured ? (
-                              <span>Connected to: <code className="bg-white/80 px-1 py-0.5 border border-indigo-100 rounded text-[8px] font-mono">{supabaseStatus.supabaseUrl}</code></span>
-                            ) : (
-                              <span>Define <code className="bg-white/80 px-1 border border-indigo-200 rounded font-mono font-bold">VITE_SUPABASE_URL</code> and <code className="bg-white/80 px-1 border border-indigo-200 rounded font-mono font-bold">VITE_SUPABASE_ANON_KEY</code> in project secrets.</span>
-                            )}
-                          </p>
 
-                          <div className="p-2 bg-gray-950 text-gray-200 rounded-lg font-mono text-[8px] leading-relaxed select-all overflow-x-auto max-h-[140px] whitespace-pre-wrap border border-gray-800 shadow-inner">
-                            {supabaseStatus?.sqlSetup || `-- Run in Supabase SQL editor`}
+                          {/* List representation of accused for seamless editing */}
+                          <div className="space-y-3">
+                            {activeDiary.accusedList.map((acc, index) => (
+                              <div key={index} className="flex gap-2 items-center bg-gray-50/30 p-2.5 rounded-xl border border-gray-150">
+                                <span className="text-[11px] font-bold text-gray-400 w-6 text-center">{acc.sNo}</span>
+                                <OutlinedInput
+                                  label={`Accused ${acc.sNo} Name & Address`}
+                                  value={acc.nameAndAddress}
+                                  onChange={(e) => handleAccusedChange(index, 'nameAndAddress', e.target.value)}
+                                  className="flex-1"
+                                />
+                                <button
+                                  onClick={() => removeAccusedRow(index)}
+                                  className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                  title="Delete Accused Row"
+                                >
+                                  <Trash className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                            {activeDiary.accusedList.length === 0 && (
+                              <p className="text-[10px] text-gray-450 text-center py-2 italic bg-gray-50/50 rounded-lg">No accused registered. Click "Add Accused" to define.</p>
+                            )}
                           </div>
                         </div>
-                      )}
 
-                      {isLoadingDbs ? (
-                        <div className="flex-1 flex flex-col items-center justify-center py-10">
-                          <RefreshCw className="w-6 h-6 text-indigo-600 animate-spin mb-2" />
-                          <p className="text-xs font-semibold text-gray-500">Loading your database library...</p>
+                        {/* Section 4: Property Details */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="p-4 border border-gray-200 rounded-xl">
+                            <OutlinedTextarea
+                              label="IV. Property Lost Details"
+                              value={activeDiary.propertyLostDetails}
+                              onChange={(e) => handleFieldChange('propertyLostDetails', e.target.value)}
+                              onVoiceClick={() => toggleVoiceTyping('propertyLostDetails')}
+                              isListening={listeningField === 'propertyLostDetails'}
+                              rows={2}
+                            />
+                          </div>
+                          <div className="p-4 border border-gray-200 rounded-xl">
+                            <OutlinedTextarea
+                              label="V. Recovered Property Details"
+                              value={activeDiary.recoveredPropertyDetails}
+                              onChange={(e) => handleFieldChange('recoveredPropertyDetails', e.target.value)}
+                              onVoiceClick={() => toggleVoiceTyping('recoveredPropertyDetails')}
+                              isListening={listeningField === 'recoveredPropertyDetails'}
+                              rows={2}
+                            />
+                          </div>
                         </div>
-                      ) : !supabaseStatus?.isConfigured ? (
-                        <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-amber-50/20 rounded-2xl border border-amber-100/50 min-h-[300px]">
-                          <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse mb-2" />
-                          <p className="text-xs font-bold text-indigo-950">Cloud Database Unconfigured</p>
-                          <p className="text-[10px] text-indigo-700/80 mt-1 max-w-[210px] leading-relaxed font-medium">
-                            Define VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your settings to unlock persistent cloud storage.
-                          </p>
-                          <button
-                            onClick={() => setShowSupaSetup(true)}
-                            className="mt-3.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-all shadow-xs"
-                          >
-                            View Setup Guide
-                          </button>
+
+                        {/* Section 5: Stage of Case and Court specifics */}
+                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">VI. Stage & Court Administration</h4>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetVal = activeDiary.stageOfTheCase === 'CASE DISPOSED' ? 'PENDING TRIAL' : 'CASE DISPOSED';
+                                handleFieldChange('stageOfTheCase', targetVal);
+                                if (targetVal === 'CASE DISPOSED') {
+                                  handleFieldChange('nextHearingDate', '');
+                                }
+                              }}
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
+                                activeDiary.stageOfTheCase === 'CASE DISPOSED'
+                                  ? 'bg-red-500 text-white border-red-600 shadow-xs'
+                                  : 'bg-red-55 text-red-750 border-red-200 hover:bg-red-100'
+                              }`}
+                              title="Click to dispose of this case immediately"
+                            >
+                              {activeDiary.stageOfTheCase === 'CASE DISPOSED' ? '✓ Case Disposed' : 'Case Disposed'}
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <OutlinedInput
+                              label="Stage of the Case"
+                              value={activeDiary.stageOfTheCase}
+                              onChange={(e) => handleFieldChange('stageOfTheCase', e.target.value)}
+                              onClear={() => handleFieldChange('stageOfTheCase', '')}
+                            />
+                            <OutlinedInput
+                              label="Court Ref. No."
+                              value={activeDiary.courtRefNo}
+                              onChange={(e) => handleFieldChange('courtRefNo', e.target.value)}
+                              onClear={() => handleFieldChange('courtRefNo', '')}
+                            />
+                            <OutlinedInput
+                              label="Hearing No."
+                              value={activeDiary.hearingNo}
+                              onChange={(e) => handleFieldChange('hearingNo', e.target.value)}
+                              onClear={() => handleFieldChange('hearingNo', '')}
+                            />
+                            <OutlinedInput
+                              label="Court Name & Place"
+                              value={activeDiary.courtNameAndPlace}
+                              onChange={(e) => handleFieldChange('courtNameAndPlace', e.target.value)}
+                              onClear={() => handleFieldChange('courtNameAndPlace', '')}
+                            />
+                          </div>
                         </div>
-                      ) : savedDatabases.length === 0 ? (
-                        <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-gray-50/50 rounded-2xl border border-gray-100 min-h-[300px]">
-                          <Database className="w-8 h-8 text-gray-300 mb-2" />
-                          <p className="text-xs font-semibold text-gray-500">No Databases Stored on Supabase</p>
-                          <p className="text-[10px] text-gray-400 mt-1 max-w-[210px] leading-relaxed">
-                            Once you load and reconstruct a scanned PDF, click <strong>"Save DB"</strong> above to store your case records in the Cloud.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3 max-h-[460px] overflow-y-auto pr-1 flex-1">
-                          {savedDatabases.map((dbItem) => {
-                            const isExpanded = selectedSavedDbId === dbItem.id;
-                            const formattedDate = new Date(dbItem.createdAt).toLocaleDateString('en-IN', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            });
-                            
-                            return (
-                              <div 
-                                key={dbItem.id} 
-                                className={`border rounded-xl transition-all ${
-                                  isExpanded 
-                                    ? 'border-indigo-200 bg-indigo-50/15 shadow-xs' 
-                                    : 'border-gray-100 bg-white hover:bg-gray-50/30'
-                                }`}
-                              >
-                                {/* Database Header (Clickable to toggle expand) */}
-                                <div 
-                                  onClick={() => setSelectedSavedDbId(isExpanded ? null : dbItem.id)}
-                                  className="p-3.5 flex items-center justify-between cursor-pointer gap-2"
+
+                        {/* Section 6: Specific Hearing Checks (Boolean YES/NO switches) */}
+                        <div className="p-4 border border-gray-200 rounded-xl space-y-4">
+                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">Hearing Parameters & Checks</h4>
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">Magistrate Present?</label>
+                              <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-205">
+                                <button
+                                  type="button"
+                                  onClick={() => handleFieldChange('whetherMagistratePresent', 'YES')}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                    activeDiary.whetherMagistratePresent === 'YES'
+                                      ? 'bg-indigo-650 text-white shadow-xs'
+                                      : 'text-gray-500 hover:text-gray-800'
+                                  }`}
                                 >
-                                  <div className="min-w-0 flex-1">
-                                    <h4 className="text-xs font-bold text-gray-950 truncate flex items-center gap-1.5">
-                                      <Database className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                                      {dbItem.name}
-                                    </h4>
-                                    <p className="text-[9px] text-gray-400 mt-0.5 font-medium">{formattedDate} • {dbItem.diaries.length} records</p>
-                                  </div>
-                                  <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180 text-indigo-600' : ''}`} />
-                                </div>
-
-                                {/* Expanded content */}
-                                {isExpanded && (
-                                  <div className="px-3.5 pb-3.5 border-t border-gray-100 bg-gray-50/20 pt-2.5 rounded-b-xl">
-                                    {/* Action row */}
-                                    <div className="grid grid-cols-2 gap-2 mb-3">
-                                      <button
-                                        onClick={() => handleViewDatabaseDraft(dbItem)}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all"
-                                      >
-                                        <Eye className="w-3 h-3" />
-                                        View Draft
-                                      </button>
-                                      <button
-                                        onClick={() => handleDownloadAllDocx(dbItem.diaries, dbItem.name)}
-                                        className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-[10px] font-semibold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all"
-                                      >
-                                        <FileDown className="w-3 h-3 text-gray-400" />
-                                        Export Word
-                                      </button>
-                                    </div>
-
-                                    {/* Cases List */}
-                                    <div className="space-y-1.5">
-                                      <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-1">Extracted Case Numbers</p>
-                                      {dbItem.diaries.map((diary) => (
-                                        <div 
-                                          key={diary.id} 
-                                          className="flex items-center justify-between p-2 bg-white border border-gray-100 rounded-lg gap-2 hover:border-indigo-100 transition-all"
-                                        >
-                                          <div className="min-w-0 flex-1">
-                                            <p className="text-[10px] font-bold text-gray-800 truncate">{diary.crNoAndSecOfLaw || 'Case Record'}</p>
-                                            <p className="text-[8px] text-gray-400 truncate">{diary.policeStation}</p>
-                                          </div>
-                                          <div className="flex items-center gap-1.5 shrink-0">
-                                            <span className="text-[8px] font-bold text-indigo-600 bg-indigo-50/50 px-1.5 py-0.5 rounded-md">{diary.dateOfCd}</span>
-                                            
-                                            {/* Edit individual record button */}
-                                            <button
-                                              onClick={(e) => handleEditDiaryFromDatabase(dbItem, diary.id, e)}
-                                              className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
-                                              title="Edit individual case record in workspace"
-                                            >
-                                              <Edit3 className="w-3 h-3" />
-                                            </button>
-
-                                            {/* Delete individual record button */}
-                                            <button
-                                              onClick={(e) => handleDeleteDiaryFromDatabase(dbItem.id, diary.id, e)}
-                                              className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                                              title="Delete individual case record from database"
-                                            >
-                                              <Trash2 className="w-3 h-3" />
-                                            </button>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-
-                                    {/* Danger Zone */}
-                                    <div className="mt-3.5 pt-2 border-t border-gray-100 flex justify-end">
-                                      <button
-                                        onClick={() => handleDeleteDatabase(dbItem.id)}
-                                        className="text-[9px] font-bold text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-md transition-all flex items-center gap-1 cursor-pointer"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                        Delete DB
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
+                                  YES
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleFieldChange('whetherMagistratePresent', 'NO')}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                    activeDiary.whetherMagistratePresent === 'NO'
+                                      ? 'bg-indigo-650 text-white shadow-xs'
+                                      : 'text-gray-500 hover:text-gray-800'
+                                  }`}
+                                >
+                                  NO
+                                </button>
                               </div>
-                            );
-                          })}
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">APP / PP Present?</label>
+                              <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-205">
+                                <button
+                                  type="button"
+                                  onClick={() => handleFieldChange('whetherAppPpPresent', 'YES')}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                    activeDiary.whetherAppPpPresent === 'YES'
+                                      ? 'bg-indigo-650 text-white shadow-xs'
+                                      : 'text-gray-500 hover:text-gray-800'
+                                  }`}
+                                >
+                                  YES
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleFieldChange('whetherAppPpPresent', 'NO')}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                    activeDiary.whetherAppPpPresent === 'NO'
+                                      ? 'bg-indigo-650 text-white shadow-xs'
+                                      : 'text-gray-500 hover:text-gray-800'
+                                  }`}
+                                >
+                                  NO
+                                </button>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">Defence Counsel Present?</label>
+                              <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-205">
+                                <button
+                                  type="button"
+                                  onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'YES')}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                    activeDiary.whetherDefenceCounselPresent === 'YES'
+                                      ? 'bg-indigo-650 text-white shadow-xs'
+                                      : 'text-gray-500 hover:text-gray-800'
+                                  }`}
+                                >
+                                  YES
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'NO')}
+                                  className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                    activeDiary.whetherDefenceCounselPresent === 'NO'
+                                      ? 'bg-indigo-650 text-white shadow-xs'
+                                      : 'text-gray-500 hover:text-gray-800'
+                                  }`}
+                                >
+                                  NO
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Numeric stats */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
+                            <OutlinedInput
+                              label="PWs Cited"
+                              value={activeDiary.noOfPwsCited}
+                              onChange={(e) => handleFieldChange('noOfPwsCited', e.target.value)}
+                            />
+                            <OutlinedInput
+                              label="PWs Examined So Far"
+                              value={activeDiary.noOfPwsExaminedSoFar}
+                              onChange={(e) => handleFieldChange('noOfPwsExaminedSoFar', e.target.value)}
+                            />
+                            <OutlinedInput
+                              label="Accused Charged"
+                              value={activeDiary.totalNoOfAccusedCharged}
+                              onChange={(e) => handleFieldChange('totalNoOfAccusedCharged', e.target.value)}
+                            />
+                            <OutlinedInput
+                              label="Accused Present"
+                              value={activeDiary.noOfAccusedPresent}
+                              onChange={(e) => handleFieldChange('noOfAccusedPresent', e.target.value)}
+                            />
+                          </div>
                         </div>
-                      )}
+
+                        {/* Section 7: Case Remarks Multi-line */}
+                        <div className="p-4 border border-indigo-200 bg-indigo-50/10 rounded-xl space-y-2">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                            <label className="block text-[10px] font-bold text-indigo-705 uppercase tracking-wider">
+                              REMARKS & TAMIL TRANSCRIPTION
+                            </label>
+                            <button
+                              type="button"
+                              onClick={toggleRemarksVoiceTyping}
+                              className={`flex items-center justify-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer border ${
+                                isListeningRemarks 
+                                  ? 'bg-red-500 hover:bg-red-650 text-white border-red-600 animate-pulse'
+                                  : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 shadow-xs'
+                              }`}
+                              title="Tamil Voice Typing"
+                            >
+                              {isListeningRemarks ? (
+                                <>
+                                  <MicOff className="w-3.5 h-3.5" />
+                                  Stop Listening
+                                </>
+                              ) : (
+                                <>
+                                  <Mic className="w-3.5 h-3.5 text-indigo-500" />
+                                  Tamil Voice Typing (பேசவும்)
+                                </>
+                              )}
+                            </button>
+                          </div>
+                          <p className="text-[9.5px] text-gray-400 font-medium">
+                            Preserve typewriter records, signatures, and fine payments clearly. Supports complete line breaks.
+                          </p>
+                          <textarea
+                            rows={8}
+                            value={activeDiary.remarks}
+                            onChange={(e) => handleFieldChange('remarks', e.target.value)}
+                            className="mt-2 w-full bg-white border border-gray-200 rounded-xl p-3.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
+                            placeholder="Insert case diary remarks, typewriter transcripts, or hand-written summaries"
+                          />
+                        </div>
+
+                        {/* Section 8: Posted & Future Hearing parameters */}
+                        <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
+                          <h4 className="text-xs font-bold text-indigo-705 uppercase tracking-wider">Posted Parameters & Next Hearing</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <OutlinedInput
+                              label="Posted For"
+                              value={activeDiary.postedFor}
+                              onChange={(e) => handleFieldChange('postedFor', e.target.value)}
+                              onClear={() => handleFieldChange('postedFor', '')}
+                            />
+                            <OutlinedInput
+                              label="Next Hearing Date"
+                              value={activeDiary.nextHearingDate}
+                              onChange={(e) => handleFieldChange('nextHearingDate', e.target.value)}
+                              onClear={() => handleFieldChange('nextHearingDate', '')}
+                            />
+                            <OutlinedInput
+                              label="Attended By"
+                              value={activeDiary.attendedBy}
+                              onChange={(e) => handleFieldChange('attendedBy', e.target.value)}
+                              onClear={() => handleFieldChange('attendedBy', '')}
+                            />
+                          </div>
+                        </div>
+
+                      </div>
+                    </div>
+                  ) : (
+                    /* WORKSPACE PLACEHOLDER */
+                    <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center min-h-[600px] my-auto">
+                      <div className="w-16 h-16 bg-gray-50 text-gray-300 rounded-2xl flex items-center justify-center mb-4 border border-gray-100 shadow-xs">
+                        <FileCheck2 className="w-8 h-8 text-indigo-500 animate-pulse" />
+                      </div>
+                      <h3 className="font-display font-bold text-gray-950 text-lg">Layout Preservation Document Workspace</h3>
+                      <p className="text-xs text-gray-400 mt-2 max-w-md leading-relaxed">
+                        Transform scanned police case diaries into pristine editable Word forms. Adjust margins, add/remove accused rows, and generate formatted docx files.
+                      </p>
+                      
+                      <div className="mt-8 flex flex-col sm:flex-row gap-4 text-left max-w-lg bg-gray-55/50 border border-gray-100 p-5 rounded-2xl">
+                        <div className="flex-1">
+                          <span className="text-xs font-semibold text-gray-800">1. Reconstruct Layout</span>
+                          <p className="text-[10px] text-gray-550 mt-1 leading-normal font-medium">
+                            Upload your Case Diary PDF in the <strong>Gateway Terminal</strong>. The system parses structural grids, accused lists, and remarks.
+                          </p>
+                        </div>
+                        <div className="w-px bg-gray-200 hidden sm:block"></div>
+                        <div className="flex-1">
+                          <span className="text-xs font-semibold text-gray-800">2. Interactive Word Compilation</span>
+                          <p className="text-[10px] text-gray-550 mt-1 leading-normal font-medium">
+                            Edit parameters right inside your browser workspace. Export high-fidelity Microsoft Word documents instantly.
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
-              </div>
+              )}
 
-              {/* Right Grid Workspace: Beautiful Form and Layout Editor (8 Columns) */}
-              <div className="lg:col-span-8 flex flex-col gap-6">
-                
-                {/* Save to Database Banner Prompt */}
-                {showSaveDbPrompt && diaries.length > 0 && (
-                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                    <div className="flex items-start gap-3 flex-1">
-                      <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl">
-                        <Database className="w-5 h-5" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-xs font-bold text-gray-950 uppercase tracking-wide">Save Extracted Diaries as a Database</h4>
-                        <p className="text-[11px] text-gray-500 mt-0.5 font-medium leading-relaxed">Give this dataset a specific name to persist these case records securely in your secure library.</p>
-                        
-                        <div className="mt-3 max-w-md">
-                          <input
-                            type="text"
-                            value={dbNameInput}
-                            onChange={(e) => setDbNameInput(e.target.value)}
-                            placeholder="e.g. Case Diary - Vikiramangalam PS - 2026"
-                            className="w-full bg-white border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3 py-1.5 text-xs font-semibold text-gray-900"
-                          />
+              {activeTab === 'dashboard' && (
+                <div className="max-w-4xl mx-auto w-full flex flex-col gap-6">
+                  {/* Officer Control Center Dashboard */}
+                  <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm border border-white/20">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-150">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 bg-indigo-50 text-indigo-650 rounded-xl">
+                          <Shield className="w-6 h-6 animate-pulse" />
+                        </div>
+                        <div>
+                          <h3 className="font-display font-bold text-gray-955 text-base">Officer Control Center</h3>
+                          <p className="text-xs text-gray-400 font-medium">Verify credentials, database states, and background system health</p>
                         </div>
                       </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                          roleInfo.level === 'admin'
+                            ? 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                            : roleInfo.level === 'officer'
+                            ? 'bg-sky-500/10 text-sky-700 border-sky-500/30'
+                            : 'bg-slate-500/10 text-slate-700 border-slate-500/30'
+                        }`}>
+                          {roleInfo.badge} Verified
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-end">
-                      <button
-                        onClick={() => setShowSaveDbPrompt(false)}
-                        className="px-3.5 py-1.5 text-xs text-gray-500 hover:text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 font-semibold rounded-xl transition-all cursor-pointer"
-                      >
-                        Dismiss
-                      </button>
-                      <button
-                        onClick={handleSaveToDatabase}
-                        className="px-4 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 font-bold rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        Save Database
-                      </button>
-                    </div>
-                  </div>
-                )}
 
-                {/* Database Save Status Feedback Notification */}
-                {saveDbStatus.message && (
-                  <div className={`p-4 border rounded-2xl flex items-center gap-2.5 text-xs font-semibold shadow-xs ${
-                    saveDbStatus.type === 'success' 
-                      ? 'bg-green-50 border-green-100 text-green-700 animate-pulse' 
-                      : saveDbStatus.type === 'error'
-                      ? 'bg-red-50 border-red-100 text-red-700'
-                      : 'bg-indigo-50 border-indigo-100 text-indigo-700'
-                  }`}>
-                    {saveDbStatus.type === 'loading' ? (
-                      <RefreshCw className="w-4 h-4 animate-spin shrink-0 text-indigo-600" />
-                    ) : saveDbStatus.type === 'success' ? (
-                      <Check className="w-4 h-4 shrink-0 text-green-600" />
-                    ) : (
-                      <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                    )}
-                    <span>{saveDbStatus.message}</span>
-                  </div>
-                )}
-
-                {activeDiary ? (
-                  <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm flex flex-col h-full min-h-[600px]">
-                    
-                    {/* Database active session indicator banner */}
-                    {loadedDbId && (
-                      <div className="mb-4 bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fade-in">
-                        <div className="flex items-center gap-2">
-                          <Database className="w-4 h-4 text-indigo-600 shrink-0" />
-                          <div>
-                            <p className="text-xs font-bold text-indigo-950">Active Database Session: <span className="underline">{loadedDbName}</span></p>
-                            <p className="text-[10px] text-indigo-700/80 font-medium">Any changes you make here can be synced directly back to your database library.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                      {/* Profile Card */}
+                      <div className="bg-gray-50/50 border border-gray-100 p-5 rounded-2xl flex items-center gap-4">
+                        {user?.photoURL ? (
+                          <img src={user.photoURL} alt={user.displayName || 'User'} className="w-16 h-16 rounded-full border border-gray-200" referrerPolicy="no-referrer" />
+                        ) : (
+                          <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-650 text-white flex items-center justify-center font-bold text-xl shadow-xs">
+                            {user?.displayName?.charAt(0) || 'U'}
                           </div>
+                        )}
+                        <div>
+                          <h4 className="text-sm font-bold text-gray-900">{user?.displayName || 'Guest Officer'}</h4>
+                          <p className="text-xs text-indigo-650 font-bold mt-0.5">{roleInfo.name}</p>
+                          <p className="text-[10px] text-gray-400 mt-0.5 font-mono">{user?.email}</p>
                         </div>
-                        <button
-                          onClick={handleUpdateDatabase}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer shadow-xs transition-all shrink-0"
-                        >
-                          <Save className="w-3.5 h-3.5" />
-                          Sync Updates to DB
-                        </button>
-                      </div>
-                    )}
-                    
-                    {/* Workspace Header Actions */}
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b border-gray-100">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="px-2 py-0.5 bg-green-50 text-green-700 text-[10px] font-bold rounded-md">VERIFIED PREVIEW</span>
-                          <span className="text-[10px] text-gray-400 font-semibold">{activeDiary.dateOfCd}</span>
-                        </div>
-                        <h2 className="font-display font-bold text-gray-950 text-lg mt-1">{activeDiary.crNoAndSecOfLaw}</h2>
-                        <p className="text-xs text-gray-400 font-medium">Reconstructed Case Diary • Station: {activeDiary.policeStation}</p>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-stretch sm:self-auto justify-end">
-                        <button
-                          id="save-draft-btn"
-                          onClick={saveWorkspaceChanges}
-                          className="border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
-                        >
-                          {isSaved ? (
-                            <>
-                              <Check className="w-4 h-4 text-green-600" />
-                              <span className="text-green-700">Changes Saved!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Save className="w-4 h-4 text-gray-400" />
-                              Save Draft
-                            </>
-                          )}
-                        </button>
+                      {/* Stats Card */}
+                      <div className="bg-gray-50/50 border border-gray-100 p-5 rounded-2xl grid grid-cols-2 gap-4">
+                        <div className="text-center bg-white p-3 rounded-xl border border-gray-200/50 shadow-sm">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase">Stored DBs</p>
+                          <p className="text-2xl font-display font-bold text-gray-900 mt-1">{savedDatabases.length}</p>
+                        </div>
+                        <div className="text-center bg-white p-3 rounded-xl border border-gray-200/50 shadow-sm">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase">Loaded cases</p>
+                          <p className="text-2xl font-display font-bold text-indigo-750 mt-1">{diaries.length}</p>
+                        </div>
+                      </div>
+                    </div>
 
-                        <button
-                          id="export-docx-btn"
-                          onClick={() => handleDownloadDocx(activeDiary)}
-                          className="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 px-3.5 rounded-xl flex items-center gap-1.5 cursor-pointer bg-white transition-all shadow-xs"
-                          title="Export the currently viewed case diary to Word"
-                        >
-                          <FileDown className="w-4 h-4 text-gray-400" />
-                          Export Case Word
-                        </button>
+                    {/* System Health / Cloud DB section */}
+                    <div className="mt-6 p-5 bg-indigo-50/15 border border-indigo-100/50 rounded-2xl">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-1.5">
+                          <Activity className="w-4 h-4 text-indigo-600 animate-pulse" />
+                          <h4 className="text-xs font-bold text-indigo-955 uppercase tracking-wider">Cloud Sync Telemetry</h4>
+                        </div>
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-bold border ${
+                          supabaseStatus?.isConfigured 
+                            ? 'bg-green-500/10 text-green-700 border-green-500/30'
+                            : 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                        }`}>
+                          <span className={`w-1 h-1 rounded-full ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-500'}`} />
+                          {supabaseStatus?.isConfigured ? 'CONNECTED' : 'DISCONNECTED'}
+                        </span>
+                      </div>
 
-                        {diaries.length > 1 && (
-                          <button
-                            id="export-all-docx-btn"
-                            onClick={() => handleDownloadAllDocx(diaries, `Combined-Case-Diaries-${Date.now()}`)}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 px-4 rounded-xl flex items-center gap-2 cursor-pointer shadow-sm hover:shadow transition-all"
-                            title="Export all loaded case diaries combined into a single Word document"
-                          >
-                            <FileDown className="w-4 h-4" />
-                            Export Combined Word ({diaries.length})
-                          </button>
+                      <div className="space-y-2.5 text-xs font-medium text-gray-600">
+                        <div className="flex justify-between py-1.5 border-b border-gray-200/40">
+                          <span>Database Client</span>
+                          <span className="font-mono text-[10px] font-bold text-gray-900">Supabase JS client v2</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-gray-200/40">
+                          <span>Connection Endpoint</span>
+                          <span className="font-mono text-[10px] text-gray-500">{supabaseStatus?.supabaseUrl ? `${supabaseStatus.supabaseUrl}` : 'N/A'}</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-gray-200/40">
+                          <span>Database Tables Verified</span>
+                          <span className={`font-bold ${supabaseStatus?.tableExists ? 'text-green-600' : 'text-amber-600'}`}>
+                            {supabaseStatus?.tableExists ? 'Verified (case_databases active)' : 'Unverified'}
+                          </span>
+                        </div>
+                        {supabaseStatus?.testError && (
+                          <div className="p-3 bg-red-50 text-red-700 rounded-xl mt-3 text-[11px] font-mono whitespace-pre-wrap leading-relaxed border border-red-100">
+                            {supabaseStatus.testError}
+                          </div>
                         )}
                       </div>
-                    </div>
 
-                    {/* Interactive Case Diary Document Form */}
-                    <div className="space-y-6 mt-6 max-h-[680px] overflow-y-auto pr-1">
-                      
-                      {/* Section 1: Headers */}
-                      <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
-                        <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">I. Administration & Registry</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Police Station</label>
-                            <input
-                              type="text"
-                              value={activeDiary.policeStation}
-                              onChange={(e) => handleFieldChange('policeStation', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-semibold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">District</label>
-                            <input
-                              type="text"
-                              value={activeDiary.district}
-                              onChange={(e) => handleFieldChange('district', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-semibold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">CR. No. & Sec of Law</label>
-                            <input
-                              type="text"
-                              value={activeDiary.crNoAndSecOfLaw}
-                              onChange={(e) => handleFieldChange('crNoAndSecOfLaw', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-semibold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Date of CD</label>
-                            <input
-                              type="text"
-                              value={activeDiary.dateOfCd}
-                              onChange={(e) => handleFieldChange('dateOfCd', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-semibold"
-                            />
-                          </div>
-                        </div>
+                      <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-200/40">
+                        <button
+                          onClick={() => setShowSupaSetup(!showSupaSetup)}
+                          className="text-xs text-indigo-700 hover:text-indigo-900 font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          {showSupaSetup ? 'Hide SQL Script' : 'Reveal SQL Script'}
+                        </button>
+                        <button
+                          onClick={() => fetchSupabaseStatus()}
+                          disabled={isLoadingSupaStatus}
+                          className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-semibold py-1.5 px-3 rounded-xl flex items-center gap-1.5 transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
+                          Verify Telemetry
+                        </button>
                       </div>
 
-                      {/* Section 2: General parameters */}
-                      <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
-                        <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">II. Occurrence & Complainant Details</h4>
-                        <div className="space-y-3">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Date, Time & Place of Occurrence</label>
-                            <textarea
-                              rows={2}
-                              value={activeDiary.dateTimeAndPlaceOfOccurrence}
-                              onChange={(e) => handleFieldChange('dateTimeAndPlaceOfOccurrence', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Date of Report / Time</label>
-                            <input
-                              type="text"
-                              value={activeDiary.dateOfReportTime}
-                              onChange={(e) => handleFieldChange('dateOfReportTime', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">II. Complainant</label>
-                            <textarea
-                              rows={2}
-                              value={activeDiary.complainant}
-                              onChange={(e) => handleFieldChange('complainant', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium"
-                            />
+                      {showSupaSetup && (
+                        <div className="mt-4 space-y-2">
+                          <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
+                            Run this SQL query inside your Supabase dashboard SQL Editor to create the correct table structure and enable secure workspace synchronization:
+                          </p>
+                          <div className="p-4 bg-slate-950 text-gray-200 rounded-xl font-mono text-[9px] leading-relaxed select-all overflow-x-auto max-h-[180px] border border-slate-900 shadow-inner">
+                            {supabaseStatus?.sqlSetup}
                           </div>
                         </div>
-                      </div>
-
-                      {/* Section 3: Accused List Table */}
-                      <div className="p-4 border border-gray-200 rounded-xl space-y-3.5">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">III. Accused Details</h4>
-                          <button
-                            onClick={addAccusedRow}
-                            className="text-[10px] bg-indigo-50 text-indigo-600 hover:bg-indigo-100 font-bold px-2.5 py-1 rounded-md flex items-center gap-1 cursor-pointer transition-colors"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            Add Accused
-                          </button>
-                        </div>
-
-                        {/* List representation of accused for seamless editing */}
-                        <div className="space-y-3">
-                          {activeDiary.accusedList.map((acc, index) => (
-                            <div key={index} className="flex gap-2 items-center bg-gray-50/30 p-2.5 rounded-lg border border-gray-100">
-                              <span className="text-[11px] font-bold text-gray-400 w-6 text-center">{acc.sNo}</span>
-                              <input
-                                type="text"
-                                value={acc.nameAndAddress}
-                                onChange={(e) => handleAccusedChange(index, 'nameAndAddress', e.target.value)}
-                                placeholder="Enter name, age, parents, address of accused"
-                                className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-1 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium"
-                              />
-                              <button
-                                onClick={() => removeAccusedRow(index)}
-                                className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                                title="Delete Accused Row"
-                              >
-                                <Trash className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ))}
-                          {activeDiary.accusedList.length === 0 && (
-                            <p className="text-[10px] text-gray-400 text-center py-2 italic bg-gray-50/50 rounded-lg">No accused registered. Click "Add Accused" to define.</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Section 4: Property Details */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="p-4 border border-gray-200 rounded-xl">
-                          <label className="block text-[10px] font-bold text-indigo-700 uppercase tracking-wider">IV. Property Lost Details</label>
-                          <textarea
-                            rows={2}
-                            value={activeDiary.propertyLostDetails}
-                            onChange={(e) => handleFieldChange('propertyLostDetails', e.target.value)}
-                            className="mt-2 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                          />
-                        </div>
-                        <div className="p-4 border border-gray-200 rounded-xl">
-                          <label className="block text-[10px] font-bold text-indigo-700 uppercase tracking-wider">V. Recovered Property Details</label>
-                          <textarea
-                            rows={2}
-                            value={activeDiary.recoveredPropertyDetails}
-                            onChange={(e) => handleFieldChange('recoveredPropertyDetails', e.target.value)}
-                            className="mt-2 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Section 5: Stage of Case and Court specifics */}
-                      <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
-                        <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">VI. Stage & Court Administration</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <div className="flex items-center justify-between">
-                              <label className="block text-[10px] font-bold text-gray-500 uppercase">Stage of the Case</label>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const targetVal = activeDiary.stageOfTheCase === 'CASE DISPOSED' ? 'PENDING TRIAL' : 'CASE DISPOSED';
-                                  handleFieldChange('stageOfTheCase', targetVal);
-                                  if (targetVal === 'CASE DISPOSED') {
-                                    handleFieldChange('nextHearingDate', '');
-                                  }
-                                }}
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
-                                  activeDiary.stageOfTheCase === 'CASE DISPOSED'
-                                    ? 'bg-red-500 text-white border-red-600 shadow-xs'
-                                    : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
-                                }`}
-                                title="Click to dispose of this case immediately"
-                              >
-                                {activeDiary.stageOfTheCase === 'CASE DISPOSED' ? '✓ Case Disposed' : 'Case Disposed'}
-                              </button>
-                            </div>
-                            <input
-                              type="text"
-                              value={activeDiary.stageOfTheCase}
-                              onChange={(e) => handleFieldChange('stageOfTheCase', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-semibold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Court Ref. No.</label>
-                            <input
-                              type="text"
-                              value={activeDiary.courtRefNo}
-                              onChange={(e) => handleFieldChange('courtRefNo', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Hearing No.</label>
-                            <input
-                              type="text"
-                              value={activeDiary.hearingNo}
-                              onChange={(e) => handleFieldChange('hearingNo', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-semibold text-indigo-700"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Court Name & Place</label>
-                            <input
-                              type="text"
-                              value={activeDiary.courtNameAndPlace}
-                              onChange={(e) => handleFieldChange('courtNameAndPlace', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Section 6: Specific Hearing Checks (Boolean YES/NO switches) */}
-                      <div className="p-4 border border-gray-200 rounded-xl space-y-4">
-                        <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Hearing Parameters & Checks</h4>
-                        
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">Magistrate Present?</label>
-                            <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-200">
-                              <button
-                                type="button"
-                                onClick={() => handleFieldChange('whetherMagistratePresent', 'YES')}
-                                className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  activeDiary.whetherMagistratePresent === 'YES'
-                                    ? 'bg-indigo-600 text-white shadow-xs'
-                                    : 'text-gray-500 hover:text-gray-800'
-                                }`}
-                              >
-                                YES
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleFieldChange('whetherMagistratePresent', 'NO')}
-                                className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  activeDiary.whetherMagistratePresent === 'NO'
-                                    ? 'bg-indigo-600 text-white shadow-xs'
-                                    : 'text-gray-500 hover:text-gray-800'
-                                }`}
-                              >
-                                NO
-                              </button>
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">APP / PP Present?</label>
-                            <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-200">
-                              <button
-                                type="button"
-                                onClick={() => handleFieldChange('whetherAppPpPresent', 'YES')}
-                                className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  activeDiary.whetherAppPpPresent === 'YES'
-                                    ? 'bg-indigo-600 text-white shadow-xs'
-                                    : 'text-gray-500 hover:text-gray-800'
-                                }`}
-                              >
-                                YES
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleFieldChange('whetherAppPpPresent', 'NO')}
-                                className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  activeDiary.whetherAppPpPresent === 'NO'
-                                    ? 'bg-indigo-600 text-white shadow-xs'
-                                    : 'text-gray-500 hover:text-gray-800'
-                                }`}
-                              >
-                                NO
-                              </button>
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5">Defence Counsel Present?</label>
-                            <div className="flex bg-gray-100 p-0.5 rounded-xl border border-gray-200">
-                              <button
-                                type="button"
-                                onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'YES')}
-                                className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  activeDiary.whetherDefenceCounselPresent === 'YES'
-                                    ? 'bg-indigo-600 text-white shadow-xs'
-                                    : 'text-gray-500 hover:text-gray-800'
-                                }`}
-                              >
-                                YES
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleFieldChange('whetherDefenceCounselPresent', 'NO')}
-                                className={`flex-1 text-center py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                  activeDiary.whetherDefenceCounselPresent === 'NO'
-                                    ? 'bg-indigo-600 text-white shadow-xs'
-                                    : 'text-gray-500 hover:text-gray-800'
-                                }`}
-                              >
-                                NO
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Numeric stats */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">PWs Cited</label>
-                            <input
-                              type="text"
-                              value={activeDiary.noOfPwsCited}
-                              onChange={(e) => handleFieldChange('noOfPwsCited', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">PWs Examined So Far</label>
-                            <input
-                              type="text"
-                              value={activeDiary.noOfPwsExaminedSoFar}
-                              onChange={(e) => handleFieldChange('noOfPwsExaminedSoFar', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Accused Charged</label>
-                            <input
-                              type="text"
-                              value={activeDiary.totalNoOfAccusedCharged}
-                              onChange={(e) => handleFieldChange('totalNoOfAccusedCharged', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Accused Present</label>
-                            <input
-                              type="text"
-                              value={activeDiary.noOfAccusedPresent}
-                              onChange={(e) => handleFieldChange('noOfAccusedPresent', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Section 7: Case Remarks Multi-line (With support for Tamil text preservation) */}
-                      <div className="p-4 border border-indigo-200 bg-indigo-50/10 rounded-xl space-y-2">
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                          <label className="block text-[10px] font-bold text-indigo-700 uppercase tracking-wider">
-                            REMARKS & TAMIL TRANSCRIPTION
-                          </label>
-                          <button
-                            type="button"
-                            onClick={toggleRemarksVoiceTyping}
-                            className={`flex items-center justify-center gap-1.5 px-3 py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer border ${
-                              isListeningRemarks 
-                                ? 'bg-red-500 hover:bg-red-600 text-white border-red-600 animate-pulse'
-                                : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-300 shadow-xs'
-                            }`}
-                            title="Tamil Voice Typing (Speak in Tamil)"
-                          >
-                            {isListeningRemarks ? (
-                              <>
-                                <MicOff className="w-3.5 h-3.5" />
-                                Stop Listening
-                              </>
-                            ) : (
-                              <>
-                                <Mic className="w-3.5 h-3.5 text-indigo-500" />
-                                Tamil Voice Typing (பேசவும்)
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-gray-400 font-medium">
-                          Preserve typewriter records, signatures, and fine payments clearly. Supports complete line breaks.
-                        </p>
-                        <textarea
-                          rows={8}
-                          value={activeDiary.remarks}
-                          onChange={(e) => handleFieldChange('remarks', e.target.value)}
-                          className="mt-2 w-full bg-white border border-gray-200 rounded-xl p-3.5 text-xs text-gray-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
-                          placeholder="Insert case diary remarks, typewriter transcripts, or hand-written summaries"
-                        />
-                      </div>
-
-                      {/* Section 8: Posted & Future Hearing parameters */}
-                      <div className="bg-gray-50/50 p-4 border border-gray-100 rounded-xl space-y-4">
-                        <h4 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Posted Parameters & Next Hearing</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Posted For</label>
-                            <input
-                              type="text"
-                              value={activeDiary.postedFor}
-                              onChange={(e) => handleFieldChange('postedFor', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-indigo-700"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Next Hearing Date</label>
-                            <input
-                              type="text"
-                              value={activeDiary.nextHearingDate}
-                              onChange={(e) => handleFieldChange('nextHearingDate', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-semibold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase">Attended By</label>
-                            <input
-                              type="text"
-                              value={activeDiary.attendedBy}
-                              onChange={(e) => handleFieldChange('attendedBy', e.target.value)}
-                              className="mt-1 w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-medium"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
+                      )}
                     </div>
                   </div>
-                ) : (
-                  /* WORKSPACE PLACEHOLDER */
-                  <div className="bg-white border border-gray-200 rounded-2xl p-8 shadow-sm flex-1 flex flex-col items-center justify-center text-center min-h-[600px] my-auto">
-                    <div className="w-16 h-16 bg-gray-50 text-gray-300 rounded-2xl flex items-center justify-center mb-4 border border-gray-100">
-                      <FileCheck2 className="w-8 h-8 text-indigo-500" />
-                    </div>
-                    <h3 className="font-display font-bold text-gray-950 text-lg">Layout Preservation Document Workspace</h3>
-                    <p className="text-xs text-gray-400 mt-2 max-w-md leading-relaxed">
-                      Transform scanned police case diaries into pristine editable Word forms. Adjust margins, add/remove accused rows, and generate formatted docx files.
-                    </p>
-                    
-                    <div className="mt-8 flex flex-col sm:flex-row gap-4 text-left max-w-lg bg-gray-50/50 border border-gray-100 p-5 rounded-2xl">
-                      <div className="flex-1">
-                        <span className="text-xs font-semibold text-gray-800">1. Reconstruct Layout</span>
-                        <p className="text-[10px] text-gray-500 mt-1 leading-normal">
-                          Upload your Case Diary PDF. The system parses structural grids, accused lists, dates, and typewriter texts.
-                        </p>
-                      </div>
-                      <div className="w-px bg-gray-200 hidden sm:block"></div>
-                      <div className="flex-1">
-                        <span className="text-xs font-semibold text-gray-800">2. Interactive Word Compilation</span>
-                        <p className="text-[10px] text-gray-500 mt-1 leading-normal">
-                          Edit parameters right inside your browser workspace. Export high-fidelity Microsoft Word documents instantly.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
       </main>
 
+      {/* Mobile Bottom Navigation Bar */}
+      {user && (
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-gray-200/80 px-4 py-2 z-50 flex items-center justify-around shadow-lg">
+          <button
+            onClick={() => setActiveTab('gateway')}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer ${
+              activeTab === 'gateway' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
+            }`}
+          >
+            <UploadCloud className="w-5 h-5" />
+            Gateway
+          </button>
+          <button
+            onClick={() => setActiveTab('records')}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer relative ${
+              activeTab === 'records' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
+            }`}
+          >
+            <FileText className="w-5 h-5" />
+            Case Files
+            {savedDatabases.length > 0 && (
+              <span className="absolute top-0 right-3 px-1 py-0.5 bg-indigo-650 text-white text-[7px] font-bold rounded-full leading-none">
+                {savedDatabases.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('editor')}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer relative ${
+              activeTab === 'editor' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
+            }`}
+          >
+            <Edit3 className="w-5 h-5" />
+            Workspace
+            {diaries.length > 0 && (
+              <span className="absolute top-0 right-3 px-1 py-0.5 bg-emerald-600 text-white text-[7px] font-bold rounded-full leading-none">
+                {diaries.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('dashboard')}
+            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer ${
+              activeTab === 'dashboard' ? 'text-indigo-600 scale-105' : 'text-gray-400 hover:text-gray-655'
+            }`}
+          >
+            <Shield className="w-5 h-5" />
+            Dashboard
+          </button>
+        </div>
+      )}
+
       {/* Footer bar */}
-      <footer className="border-t border-gray-200 bg-white py-6 px-6 text-center text-[10px] text-gray-400 font-medium">
+      <footer className="border-t border-gray-200 bg-white py-6 px-6 text-center text-[10px] text-gray-400 font-medium z-10 relative">
         <p>DocuForge Case Diary Reconstruction Workspace • Powered securely by Google Cloud Platform & Gemini</p>
       </footer>
     </div>

@@ -59,11 +59,12 @@ function cleanPoliceStation(ps: string): string {
   return cleaned.trim().toUpperCase();
 }
 
-function cleanPropertyDetail(val: string, stage: string): string {
+function cleanPropertyDetail(val: string, stage: string, postedFor?: string): string {
   if (!val) return "";
   const trimmed = val.trim();
   const upper = trimmed.toUpperCase();
   const stageUpper = (stage || "").trim().toUpperCase();
+  const postedUpper = (postedFor || "").trim().toUpperCase();
   
   if (upper === "NIL" || 
       upper === "NIL." || 
@@ -71,12 +72,19 @@ function cleanPropertyDetail(val: string, stage: string): string {
       upper === "NONE." || 
       upper === "NILL" || 
       upper === stageUpper || 
-      upper === "PENDING TRIAL" || 
-      upper === "CASE DISPOSED") {
+      (postedUpper && upper === postedUpper) ||
+      upper.includes("PENDING TRIAL") || 
+      upper.includes("CASE DISPOSED") ||
+      upper.includes("ACCUSED APPEARANCE") ||
+      upper.includes("HEARING") ||
+      upper.includes("CHALLAN") ||
+      upper.includes("CHARGE SHEET") ||
+      upper.includes("INVESTIGATION")) {
     return "";
   }
   return trimmed;
 }
+
 
 
 /**
@@ -220,6 +228,9 @@ function gridPairRow(
 }
 
 function createDiaryChildren(diary: CaseDiary): any[] {
+  const propertyLostCleaned = cleanPropertyDetail(diary.propertyLostDetails, diary.stageOfTheCase, diary.postedFor);
+  const recoveredPropertyCleaned = cleanPropertyDetail(diary.recoveredPropertyDetails, diary.stageOfTheCase, diary.postedFor);
+
   // ---- Nested Accused table (the ONLY visible-border table in the document) ----
   const accusedHeaders = new TableRow({
     children: [
@@ -384,20 +395,25 @@ function createDiaryChildren(diary: CaseDiary): any[] {
     accusedTable,
 
     // Section 4: Property Lost
-    createSectionHeader("IV.PROPERTY LOST DETAILS"),
-    new Paragraph({
-      children: [normalText(cleanPropertyDetail(diary.propertyLostDetails, diary.stageOfTheCase))],
-      spacing: { before: 40, after: 80 },
-      indent: { left: 200 },
-    }),
+    ...(propertyLostCleaned ? [
+      createSectionHeader("IV.PROPERTY LOST DETAILS"),
+      new Paragraph({
+        children: [normalText(propertyLostCleaned)],
+        spacing: { before: 40, after: 80 },
+        indent: { left: 200 },
+      })
+    ] : []),
 
     // Section 5: Recovered Property
-    createSectionHeader("V.RECOVERED PROPERTY DETAILS"),
-    new Paragraph({
-      children: [normalText(cleanPropertyDetail(diary.recoveredPropertyDetails, diary.stageOfTheCase))],
-      spacing: { before: 40, after: 80 },
-      indent: { left: 200 },
-    }),
+    ...(recoveredPropertyCleaned ? [
+      createSectionHeader("V.RECOVERED PROPERTY DETAILS"),
+      new Paragraph({
+        children: [normalText(recoveredPropertyCleaned)],
+        spacing: { before: 40, after: 80 },
+        indent: { left: 200 },
+      })
+    ] : []),
+
 
     new Paragraph({ spacing: { before: 40, after: 40 } }),
 
