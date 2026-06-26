@@ -42,6 +42,7 @@ import {
   Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Analytics } from '@vercel/analytics/react';
 import { initAuth, googleSignIn, logout } from './firebase';
 import { uploadAndConvertPdf, exportToDocx } from './converter';
 import { generateCaseDiaryDocx, generateMultipleCaseDiariesDocx } from './exportDocx';
@@ -3193,6 +3194,7 @@ export default function App() {
       <footer className="border-t py-6 px-6 text-center text-[10px] font-medium z-10 relative" style={{ borderColor: 'var(--th-border)', background: 'var(--th-header-bg)', color: 'var(--th-text4)' }}>
         <p>DocuForge Case Diary Reconstruction Workspace • Powered securely by Google Cloud Platform & Gemini</p>
       </footer>
+      <Analytics />
     </div>
   );
 }
