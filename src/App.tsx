@@ -51,6 +51,7 @@ import { generateCaseDiaryDocx, generateMultipleCaseDiariesDocx } from './export
 import { exportDiariesToZip } from './exportZip';
 import { User } from 'firebase/auth';
 import { CaseDiary, Accused, SavedDatabase } from './types';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase, getSavedDatabaseById } from './dbHelper';
 import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
 
@@ -4439,6 +4440,7 @@ export default function App() {
       <footer className="border-t py-6 px-6 text-center text-[10px] font-medium z-10 relative" style={{ borderColor: 'var(--th-border)', background: 'var(--th-header-bg)', color: 'var(--th-text4)' }}>
         <p>DocuForge Case Diary Reconstruction Workspace • Powered securely by Google Cloud Platform & Gemini</p>
       </footer>
+      <SpeedInsights />
     </div>
   );
 }
