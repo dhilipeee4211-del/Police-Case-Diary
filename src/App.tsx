@@ -42,7 +42,11 @@ import {
   Pause,
   Sun,
   Moon,
-  PackageOpen
+  PackageOpen,
+  Cpu,
+  Settings,
+  Terminal,
+  HeartPulse
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Analytics } from '@vercel/analytics/react';
@@ -59,6 +63,8 @@ import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
 import { Logger } from './services/Logger';
 import { StorageManager } from './services/StorageManager';
 import { ApiKeyManager } from './services/ApiKeyManager';
+import { DataHealthService } from './services/DataHealthService';
+import { DuplicateGroup } from './services/DuplicateScanner';
 import { QueueManager } from './services/QueueManager';
 import { RecoveryManager } from './services/RecoveryManager';
 import { ProgressManager } from './services/ProgressManager';
@@ -528,6 +534,46 @@ export default function App() {
     return `${diffHour} hour${diffHour === 1 ? '' : 's'} ago`;
   };
 
+  const [adminSubTab, setAdminSubTab] = useState<'dashboard' | 'users' | 'pdf' | 'logs' | 'settings' | 'health'>('dashboard');
+
+  // Data Health Check Module states
+  const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [scanProgress, setScanProgress] = useState<number>(0);
+  const [scannedCount, setScannedCount] = useState<number>(0);
+  const [totalToScan, setTotalToScan] = useState<number>(0);
+  const [estTimeSecs, setEstTimeSecs] = useState<number>(0);
+  const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
+  const [filteredGroups, setFilteredGroups] = useState<DuplicateGroup[]>([]);
+  const [selectedGroupForCompare, setSelectedGroupForCompare] = useState<DuplicateGroup | null>(null);
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set());
+  const [healthSearch, setHealthSearch] = useState<string>('');
+  const [healthStation, setHealthStation] = useState<string>('all');
+  const [healthYear, setHealthYear] = useState<string>('all');
+  const [healthCourt, setHealthCourt] = useState<string>('all');
+  const [healthOfficer, setHealthOfficer] = useState<string>('all');
+  const [healthStats, setHealthStats] = useState<{
+    totalRecords: number;
+    uniqueRecords: number;
+    duplicateGroupsCount: number;
+    totalDuplicatesCount: number;
+    scanTimeMs: number;
+    lastScanDate: string;
+    removedCount: number;
+    score: number;
+  }>({
+    totalRecords: 0,
+    uniqueRecords: 0,
+    duplicateGroupsCount: 0,
+    totalDuplicatesCount: 0,
+    scanTimeMs: 0,
+    lastScanDate: '',
+    removedCount: 0,
+    score: 100
+  });
+
+  const [backupsList, setBackupsList] = useState<any[]>([]);
+  const [auditLogsList, setAuditLogsList] = useState<any[]>([]);
+
 
   const [importConflictData, setImportConflictData] = useState<{
     dbName: string;
@@ -540,6 +586,186 @@ export default function App() {
   useEffect(() => {
     ApiKeyManager.initialize();
   }, []);
+
+  const loadBackupsAndLogs = async () => {
+    try {
+      const backups = await DataHealthService.getBackups();
+      const audits = await DataHealthService.getAuditLogs();
+      setBackupsList(backups);
+      setAuditLogsList(audits);
+    } catch (err) {
+      console.error("Failed to load backups/audit logs:", err);
+    }
+  };
+
+  // Sync health check filters
+  useEffect(() => {
+    const params = {
+      search: healthSearch,
+      station: healthStation,
+      year: healthYear,
+      court: healthCourt,
+      officer: healthOfficer
+    };
+    const filtered = DataHealthService.filterGroups(duplicateGroups, params);
+    setFilteredGroups(filtered);
+  }, [healthSearch, healthStation, healthYear, healthCourt, healthOfficer, duplicateGroups]);
+
+  const runHealthScan = async () => {
+    if (savedDatabases.length === 0) {
+      alert("No databases found to scan.");
+      return;
+    }
+
+    setIsScanning(true);
+    setScanProgress(0);
+    setScannedCount(0);
+    setExpandedGroupKeys(new Set());
+
+    let totalCount = 0;
+    savedDatabases.forEach(db => {
+      if (!db.id.startsWith('__')) {
+        totalCount += (db.diaries || []).length;
+      }
+    });
+
+    setTotalToScan(totalCount);
+
+    const startTime = Date.now();
+    const steps = Math.min(25, totalCount || 1);
+    const stepDelay = Math.max(50, 1500 / steps); // Complete scan progress loop in 1.5 seconds
+
+    for (let i = 1; i <= steps; i++) {
+      await new Promise(resolve => setTimeout(resolve, stepDelay));
+      const progressPercent = Math.floor((i / steps) * 100);
+      const processed = Math.floor((i / steps) * totalCount);
+      const timeRemaining = Math.max(0, Math.ceil(((steps - i) * stepDelay) / 1000));
+
+      setScanProgress(progressPercent);
+      setScannedCount(processed);
+      setEstTimeSecs(timeRemaining);
+    }
+
+    const results = DataHealthService.scanDatabase(savedDatabases);
+    const scanDuration = Date.now() - startTime;
+
+    let totalDuplicates = 0;
+    results.forEach(g => {
+      totalDuplicates += g.duplicates.length;
+    });
+
+    const unique = totalCount - totalDuplicates;
+    const healthScore = totalCount > 0 ? Math.floor((unique / totalCount) * 100) : 100;
+
+    setDuplicateGroups(results);
+    setHealthStats(prev => ({
+      ...prev,
+      totalRecords: totalCount,
+      uniqueRecords: unique,
+      duplicateGroupsCount: results.length,
+      totalDuplicatesCount: totalDuplicates,
+      scanTimeMs: scanDuration,
+      lastScanDate: new Date().toLocaleString('en-GB'),
+      score: healthScore
+    }));
+
+    setIsScanning(false);
+    await loadBackupsAndLogs();
+  };
+
+  const handleRemoveGroupDuplicates = async (group: DuplicateGroup) => {
+    if (window.confirm(`Are you sure you want to delete ${group.duplicates.length} duplicate record(s) and preserve the oldest original record? This action will generate a safety restore backup. Continue?`)) {
+      try {
+        setIsScanning(true);
+        await DataHealthService.removeGroupDuplicates(group, user?.email || 'admin@gmail.com', savedDatabases);
+        
+        // Refresh databases list from Supabase
+        const dbs = await getSavedDatabases(user?.uid || '');
+        setSavedDatabases(dbs);
+
+        const updatedResults = DataHealthService.scanDatabase(dbs);
+        setDuplicateGroups(updatedResults);
+
+        setHealthStats(prev => ({
+          ...prev,
+          removedCount: prev.removedCount + group.duplicates.length
+        }));
+
+        await loadBackupsAndLogs();
+        alert("Duplicates removed successfully!");
+      } catch (err: any) {
+        alert(`Failed to remove duplicates: ${err.message || err}`);
+      } finally {
+        setIsScanning(false);
+      }
+    }
+  };
+
+  const handleBulkRemoveAll = async () => {
+    if (duplicateGroups.length === 0) {
+      alert("No duplicate groups found to clean.");
+      return;
+    }
+    
+    let totalDuplicates = 0;
+    duplicateGroups.forEach(g => {
+      totalDuplicates += g.duplicates.length;
+    });
+
+    const confirmMsg = `You are about to remove ${totalDuplicates} duplicate records.\n\nThe oldest record in each duplicate group will be preserved.\n\nThis action cannot be undone.\n\nContinue?`;
+    if (window.confirm(confirmMsg)) {
+      try {
+        setIsScanning(true);
+        const removed = await DataHealthService.bulkRemoveAllDuplicates(
+          duplicateGroups,
+          user?.email || 'admin@gmail.com',
+          savedDatabases
+        );
+
+        // Refresh databases list from Supabase
+        const dbs = await getSavedDatabases(user?.uid || '');
+        setSavedDatabases(dbs);
+
+        const updatedResults = DataHealthService.scanDatabase(dbs);
+        setDuplicateGroups(updatedResults);
+
+        setHealthStats(prev => ({
+          ...prev,
+          removedCount: prev.removedCount + removed
+        }));
+
+        await loadBackupsAndLogs();
+        alert(`Successfully removed ${removed} duplicate records!`);
+      } catch (err: any) {
+        alert(`Bulk cleanup failed and changes were safely rolled back: ${err.message || err}`);
+      } finally {
+        setIsScanning(false);
+      }
+    }
+  };
+
+  const handleRestoreBackup = async (backupId: string) => {
+    if (window.confirm("Are you sure you want to restore this backup? This will revert the affected databases to their original states and delete the backup registry record.")) {
+      try {
+        setIsScanning(true);
+        await DataHealthService.restoreBackup(backupId);
+
+        // Refresh databases list from Supabase
+        const dbs = await getSavedDatabases(user?.uid || '');
+        setSavedDatabases(dbs);
+
+        const updatedResults = DataHealthService.scanDatabase(dbs);
+        setDuplicateGroups(updatedResults);
+
+        await loadBackupsAndLogs();
+        alert("Backup snapshot successfully restored!");
+      } catch (err: any) {
+        alert(`Backup restoration failed: ${err.message || err}`);
+      } finally {
+        setIsScanning(false);
+      }
+    }
+  };
 
   // Initialize RecoveryManager and sync queue state once user is logged in
   useEffect(() => {
@@ -1989,7 +2215,7 @@ export default function App() {
         <div className="hidden lg:block backdrop-blur-xl border-b sticky top-[61px] z-40" style={{ background: 'var(--th-header-bg)', borderColor: 'var(--th-header-border)' }}>
           <div className="max-w-7xl mx-auto px-8 py-2 flex items-center justify-between">
             <div className="flex items-center gap-1">
-              {(['gateway', 'records', 'editor', 'bulkexport', 'dashboard'] as const).map((tab) => {
+              {(['gateway', 'records', 'editor', 'bulkexport', 'dashboard'] as const).filter((tab) => tab !== 'dashboard' || roleInfo.level === 'admin').map((tab) => {
                 const isActive = activeTab === tab;
                 const labels: Record<string, React.ReactNode> = {
                   gateway: 'Gateway Terminal',
@@ -3839,136 +4065,139 @@ export default function App() {
                 </div>
               )}
 
-              {activeTab === 'dashboard' && (
-                <div className="max-w-4xl mx-auto w-full flex flex-col gap-6">
-                  {/* Admin Control Center Dashboard */}
-                  <div className="bg-white/80 backdrop-blur-md border border-gray-200 rounded-3xl p-6 shadow-sm border border-white/20">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-150">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-indigo-50 text-indigo-650 rounded-xl">
-                          <Shield className="w-6 h-6 animate-pulse" />
-                        </div>
-                        <div>
-                          <h3 className="font-display font-bold text-gray-955 text-base">Admin Control Center</h3>
-                          <p className="text-xs text-gray-400 font-medium">Verify credentials, database states, and background system health</p>
-                        </div>
+              {activeTab === 'dashboard' && roleInfo.level === 'admin' && (
+                <div className="max-w-7xl mx-auto w-full flex flex-col md:flex-row gap-6 items-start">
+                  {/* Admin Sidebar Navigation */}
+                  <div className="w-full md:w-60 shrink-0 flex flex-col gap-4">
+                    <div className="bg-white/80 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-3xl p-5 shadow-sm">
+                      <div className="flex items-center gap-2 pb-3 mb-4 border-b border-gray-150 dark:border-slate-800">
+                        <Shield className="w-5 h-5 text-indigo-650" />
+                        <span className="font-display font-bold text-xs uppercase tracking-wider" style={{ color: 'var(--th-text)' }}>Admin Control</span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                          roleInfo.level === 'admin'
-                            ? 'bg-amber-500/10 text-amber-700 border-amber-500/30'
-                            : roleInfo.level === 'officer'
-                            ? 'bg-sky-500/10 text-sky-700 border-sky-500/30'
-                            : 'bg-slate-500/10 text-slate-700 border-slate-500/30'
-                        }`}>
-                          {roleInfo.badge} Verified
-                        </span>
-                      </div>
+                      <nav className="flex flex-row md:flex-col gap-1.5 overflow-x-auto md:overflow-x-visible pb-2 md:pb-0">
+                        {([
+                          { id: 'dashboard', name: 'Dashboard', icon: <Activity className="w-4 h-4" /> },
+                          { id: 'users', name: 'User Management', icon: <Lock className="w-4 h-4" /> },
+                          { id: 'pdf', name: 'PDF Processing', icon: <Cpu className="w-4 h-4" /> },
+                          { id: 'logs', name: 'Logs', icon: <Terminal className="w-4 h-4" /> },
+                          { id: 'settings', name: 'Settings', icon: <Settings className="w-4 h-4" /> },
+                          { id: 'health', name: 'Data Health Check', icon: <HeartPulse className="w-4 h-4" />, badge: 'NEW' }
+                        ] as { id: 'dashboard' | 'users' | 'pdf' | 'logs' | 'settings' | 'health'; name: string; icon: React.ReactNode; badge?: string }[]).map((sub) => {
+                          const isActive = adminSubTab === sub.id;
+                          return (
+                            <button
+                              key={sub.id}
+                              onClick={() => {
+                                setAdminSubTab(sub.id);
+                                if (sub.id === 'health') loadBackupsAndLogs();
+                              }}
+                              className="flex items-center gap-2.5 px-3 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap w-full text-left"
+                              style={isActive ? {
+                                background: 'var(--th-primary-xlight)',
+                                color: 'var(--th-primary)'
+                              } : {
+                                color: 'var(--th-text3)'
+                              }}
+                            >
+                              {sub.icon}
+                              <span>{sub.name}</span>
+                              {sub.badge && (
+                                <span className="ml-auto bg-indigo-600 text-white text-[8px] px-1 py-0.5 rounded-md font-extrabold uppercase">
+                                  {sub.badge}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </nav>
                     </div>
+                  </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                      {/* Profile Card */}
-                      <div className="bg-gray-50/50 border border-gray-100 p-5 rounded-2xl flex items-center gap-4">
-                        {user?.photoURL ? (
-                          <img src={user.photoURL} alt={user.displayName || 'User'} className="w-16 h-16 rounded-full border border-gray-200" referrerPolicy="no-referrer" />
-                        ) : (
-                          <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-650 text-white flex items-center justify-center font-bold text-xl shadow-xs">
-                            {user?.displayName?.charAt(0) || 'U'}
-                          </div>
-                        )}
-                        <div>
-                          <h4 className="text-sm font-bold text-gray-900">{user?.displayName || 'Guest Officer'}</h4>
-                          <p className="text-xs text-indigo-650 font-bold mt-0.5">{roleInfo.name}</p>
-                          <p className="text-[10px] text-gray-400 mt-0.5 font-mono">{user?.email}</p>
-                        </div>
-                      </div>
-
-                      {/* Stats Card */}
-                      <div className="bg-gray-50/50 border border-gray-100 p-5 rounded-2xl grid grid-cols-2 gap-4">
-                        <div className="text-center bg-white p-3 rounded-xl border border-gray-200/50 shadow-sm">
-                          <p className="text-[10px] font-bold text-gray-400 uppercase">Stored DBs</p>
-                          <p className="text-2xl font-display font-bold text-gray-900 mt-1">{savedDatabases.length}</p>
-                        </div>
-                        <div className="text-center bg-white p-3 rounded-xl border border-gray-200/50 shadow-sm">
-                          <p className="text-[10px] font-bold text-gray-400 uppercase">Loaded cases</p>
-                          <p className="text-2xl font-display font-bold text-indigo-750 mt-1">{diaries.length}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* System Health / Cloud DB section */}
-                    <div className="mt-6 p-5 bg-indigo-50/15 border border-indigo-100/50 rounded-2xl">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-1.5">
-                          <Activity className="w-4 h-4 text-indigo-600 animate-pulse" />
-                          <h4 className="text-xs font-bold text-indigo-955 uppercase tracking-wider">Cloud Sync Telemetry</h4>
-                        </div>
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-bold border ${
-                          supabaseStatus?.isConfigured 
-                            ? 'bg-green-500/10 text-green-700 border-green-500/30'
-                            : 'bg-amber-500/10 text-amber-700 border-amber-500/30'
-                        }`}>
-                          <span className={`w-1 h-1 rounded-full ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-500'}`} />
-                          {supabaseStatus?.isConfigured ? 'CONNECTED' : 'DISCONNECTED'}
-                        </span>
-                      </div>
-
-                      <div className="space-y-2.5 text-xs font-medium text-gray-600">
-                        <div className="flex justify-between py-1.5 border-b border-gray-200/40">
-                          <span>Database Client</span>
-                          <span className="font-mono text-[10px] font-bold text-gray-900">Supabase JS client v2</span>
-                        </div>
-                        <div className="flex justify-between py-1.5 border-b border-gray-200/40">
-                          <span>Connection Endpoint</span>
-                          <span className="font-mono text-[10px] text-gray-500">{supabaseStatus?.supabaseUrl ? `${supabaseStatus.supabaseUrl}` : 'N/A'}</span>
-                        </div>
-                        <div className="flex justify-between py-1.5 border-b border-gray-200/40">
-                          <span>Database Tables Verified</span>
-                          <span className={`font-bold ${supabaseStatus?.tableExists ? 'text-green-600' : 'text-amber-600'}`}>
-                            {supabaseStatus?.tableExists ? 'Verified (case_databases active)' : 'Unverified'}
-                          </span>
-                        </div>
-                        {supabaseStatus?.testError && (
-                          <div className="p-3 bg-red-50 text-red-700 rounded-xl mt-3 text-[11px] font-mono whitespace-pre-wrap leading-relaxed border border-red-100">
-                            {supabaseStatus.testError}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-200/40">
-                        <button
-                          onClick={() => setShowSupaSetup(!showSupaSetup)}
-                          className="text-xs text-indigo-700 hover:text-indigo-900 font-bold flex items-center gap-1 cursor-pointer"
-                        >
-                          {showSupaSetup ? 'Hide SQL Script' : 'Reveal SQL Script'}
-                        </button>
-                        <button
-                          onClick={() => fetchSupabaseStatus()}
-                          disabled={isLoadingSupaStatus}
-                          className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-semibold py-1.5 px-3 rounded-xl flex items-center gap-1.5 transition-all shadow-xs disabled:opacity-50 cursor-pointer"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSupaStatus ? 'animate-spin' : ''}`} />
-                          Verify Telemetry
-                        </button>
-                      </div>
-
-                      {showSupaSetup && (
-                        <div className="mt-4 space-y-2">
-                          <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
-                            Run this SQL query inside your Supabase dashboard SQL Editor to create the correct table structure and enable secure workspace synchronization:
-                          </p>
-                          <div className="p-4 bg-slate-950 text-gray-200 rounded-xl font-mono text-[9px] leading-relaxed select-all overflow-x-auto max-h-[180px] border border-slate-900 shadow-inner">
-                            {supabaseStatus?.sqlSetup}
+                  {/* Admin Sub-Tab Contents */}
+                  <div className="flex-1 w-full flex flex-col gap-6">
+                    {adminSubTab === 'dashboard' && (
+                      <div className="bg-white/80 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm w-full">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-150 dark:border-slate-800">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-indigo-50 dark:bg-slate-800 text-indigo-650 rounded-xl animate-pulse">
+                              <Shield className="w-6 h-6" />
+                            </div>
+                            <div>
+                              <h3 className="font-display font-bold text-base" style={{ color: 'var(--th-text)' }}>Admin Dashboard</h3>
+                              <p className="text-xs font-medium" style={{ color: 'var(--th-text3)' }}>System stats, user details, and active cloud databases</p>
+                            </div>
                           </div>
                         </div>
-                      )}
-                    </div>
 
-                    {user?.email === 'dhilipeee4211@gmail.com' && (
-                      <div
-                        className="mt-6 p-6 border rounded-2xl shadow-sm"
-                        style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
-                      >
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                          {/* Profile Card */}
+                          <div className="bg-gray-50/50 dark:bg-slate-900/40 border border-gray-100 dark:border-slate-800 p-5 rounded-2xl flex items-center gap-4">
+                            {user?.photoURL ? (
+                              <img src={user.photoURL} alt={user.displayName || 'User'} className="w-16 h-16 rounded-full border border-gray-200 dark:border-slate-800" referrerPolicy="no-referrer" />
+                            ) : (
+                              <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-650 text-white flex items-center justify-center font-bold text-xl shadow-xs">
+                                {user?.displayName?.charAt(0) || 'U'}
+                              </div>
+                            )}
+                            <div>
+                              <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>{user?.displayName || 'Admin'}</h4>
+                              <p className="text-xs text-indigo-650 font-bold mt-0.5">{roleInfo.name}</p>
+                              <p className="text-[10px] mt-0.5 font-mono" style={{ color: 'var(--th-text4)' }}>{user?.email}</p>
+                            </div>
+                          </div>
+
+                          {/* Stats Card */}
+                          <div className="bg-gray-50/50 dark:bg-slate-900/40 border border-gray-100 dark:border-slate-800 p-5 rounded-2xl grid grid-cols-2 gap-4">
+                            <div className="text-center bg-white dark:bg-slate-900 p-3 rounded-xl border border-gray-200/50 dark:border-slate-800 shadow-sm">
+                              <p className="text-[10px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Stored DBs</p>
+                              <p className="text-2xl font-display font-bold mt-1" style={{ color: 'var(--th-text)' }}>{savedDatabases.length}</p>
+                            </div>
+                            <div className="text-center bg-white dark:bg-slate-900 p-3 rounded-xl border border-gray-200/50 dark:border-slate-800 shadow-sm">
+                              <p className="text-[10px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Loaded cases</p>
+                              <p className="text-2xl font-display font-bold mt-1" style={{ color: 'var(--th-primary)' }}>{diaries.length}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* System Health / Cloud DB section */}
+                        <div className="mt-6 p-5 border rounded-2xl" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-1.5">
+                              <Activity className="w-4 h-4 text-indigo-600 animate-pulse" />
+                              <h4 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--th-text2)' }}>Cloud Sync Telemetry</h4>
+                            </div>
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-bold border ${
+                              supabaseStatus?.isConfigured 
+                                ? 'bg-green-500/10 text-green-700 border-green-500/30'
+                                : 'bg-amber-500/10 text-amber-700 border-amber-500/30'
+                            }`}>
+                              <span className={`w-1 h-1 rounded-full ${supabaseStatus?.isConfigured ? 'bg-green-500 animate-pulse' : 'bg-amber-50'}`} />
+                              {supabaseStatus?.isConfigured ? 'CONNECTED' : 'DISCONNECTED'}
+                            </span>
+                          </div>
+
+                          <div className="space-y-2.5 text-xs font-medium" style={{ color: 'var(--th-text3)' }}>
+                            <div className="flex justify-between py-1.5 border-b border-gray-200/40">
+                              <span>Database Client</span>
+                              <span className="font-mono text-[10px] font-bold" style={{ color: 'var(--th-text)' }}>Supabase JS client v2</span>
+                            </div>
+                            <div className="flex justify-between py-1.5 border-b border-gray-200/40">
+                              <span>Connection Endpoint</span>
+                              <span className="font-mono text-[10px]" style={{ color: 'var(--th-text4)' }}>{supabaseStatus?.supabaseUrl ? `${supabaseStatus.supabaseUrl}` : 'N/A'}</span>
+                            </div>
+                            <div className="flex justify-between py-1.5 border-b border-gray-200/40">
+                              <span>Database Tables Verified</span>
+                              <span className={`font-bold ${supabaseStatus?.tableExists ? 'text-green-600' : 'text-amber-600'}`}>
+                                {supabaseStatus?.tableExists ? 'Verified (case_databases active)' : 'Unverified'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {adminSubTab === 'users' && (
+                      <div className="bg-white/80 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm w-full">
                         <div className="flex items-center gap-2 mb-5">
                           <div className="p-2 rounded-xl" style={{ background: 'var(--th-primary-xlight)', color: 'var(--th-primary)' }}>
                             <Lock className="w-4 h-4" />
@@ -3980,26 +4209,21 @@ export default function App() {
                         </div>
 
                         {/* Grant Access Form */}
-                        <div
-                          className="grid grid-cols-1 gap-4 p-4 rounded-xl mb-5 border"
-                          style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}
-                        >
+                        <div className="grid grid-cols-1 gap-4 p-4 rounded-xl mb-5 border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {/* Multi-email input */}
                             <div>
                               <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--th-text3)' }}>
                                 User Emails <span className="normal-case font-normal">(comma-separated for multiple)</span>
                               </label>
                               <textarea
                                 rows={2}
-                                placeholder={"e.g. user1@gmail.com, user2@gmail.com"}
+                                placeholder="e.g. user1@gmail.com, user2@gmail.com"
                                 value={adminGrantEmails}
                                 onChange={(e) => setAdminGrantEmails(e.target.value)}
                                 className="w-full px-3 py-2 border rounded-xl text-xs font-semibold focus:outline-none transition-all resize-none shadow-xs"
                                 style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
                               />
                             </div>
-                            {/* Database selector */}
                             <div>
                               <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--th-text3)' }}>
                                 Select Database
@@ -4032,7 +4256,7 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* Current Access — Grouped by Database */}
+                        {/* Current Access list */}
                         <div>
                           <p className="text-[10px] font-bold uppercase tracking-wider mb-3" style={{ color: 'var(--th-text3)' }}>Current Access — Grouped by Database</p>
                           {savedDatabases.length === 0 ? (
@@ -4040,16 +4264,11 @@ export default function App() {
                           ) : (
                             <div className="flex flex-col gap-3 max-h-[360px] overflow-y-auto pr-1">
                               {savedDatabases.map((db) => {
-                                // Collect all emails that have access to this DB
                                 const usersWithAccess = (Object.entries(adminAccessMap) as [string, string[]][]).filter(
                                   ([, dbIds]) => dbIds.includes(db.id)
                                 ).map(([email]) => email);
                                 return (
-                                  <div
-                                    key={db.id}
-                                    className="p-4 rounded-xl border"
-                                    style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)' }}
-                                  >
+                                  <div key={db.id} className="p-4 rounded-xl border" style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)' }}>
                                     <div className="flex items-center gap-2 mb-2">
                                       <Database className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--th-primary)' }} />
                                       <span className="text-xs font-bold truncate" style={{ color: 'var(--th-text)' }}>{db.name}</span>
@@ -4062,19 +4281,9 @@ export default function App() {
                                     ) : (
                                       <div className="flex flex-wrap gap-1.5">
                                         {usersWithAccess.map((email) => (
-                                          <span
-                                            key={email}
-                                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold border"
-                                            style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}
-                                          >
+                                          <span key={email} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold border" style={{ background: 'var(--th-primary-xlight)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}>
                                             {email}
-                                            <button
-                                              onClick={() => handleUpdateAccess(email, db.id, 'revoke')}
-                                              className="text-red-400 hover:text-red-600 font-bold ml-0.5 cursor-pointer"
-                                              title={`Revoke ${email}'s access to ${db.name}`}
-                                            >
-                                              ✕
-                                            </button>
+                                            <button onClick={() => handleUpdateAccess(email, db.id, 'revoke')} className="text-red-400 hover:text-red-600 font-bold ml-0.5 cursor-pointer" title={`Revoke ${email}'s access`}>✕</button>
                                           </span>
                                         ))}
                                       </div>
@@ -4085,6 +4294,478 @@ export default function App() {
                             </div>
                           )}
                         </div>
+                      </div>
+                    )}
+
+                    {adminSubTab === 'pdf' && (
+                      <div className="bg-white/80 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm w-full">
+                        <div className="flex items-center gap-2 mb-5 pb-4 border-b border-gray-100 dark:border-slate-800">
+                          <Cpu className="w-5 h-5 text-indigo-650" />
+                          <div>
+                            <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>PDF Queue Processing Engine</h4>
+                            <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Telemetries and chunk batch execution states</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="p-4 rounded-xl border space-y-2 text-xs" style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)' }}>
+                            <p className="font-bold uppercase text-[9px]" style={{ color: 'var(--th-text4)' }}>Active Key Rotation Status</p>
+                            <div className="flex justify-between">
+                              <span>Active Key Index:</span>
+                              <span className="font-bold">Key #{activeIndex + 1} of {totalKeys || 1}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Rotation Mode:</span>
+                              <span className="text-green-600 font-bold">AUTOMATIC</span>
+                            </div>
+                          </div>
+
+                          <div className="p-4 rounded-xl border space-y-2 text-xs" style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)' }}>
+                            <p className="font-bold uppercase text-[9px]" style={{ color: 'var(--th-text4)' }}>Batching Parameters</p>
+                            <div className="flex justify-between">
+                              <span>Concurrency Limit:</span>
+                              <span className="font-bold">{concurrencyLimit} request(s)</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Chunk Sizing:</span>
+                              <span className="font-bold">{chunkSize} pages per batch</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {adminSubTab === 'logs' && (
+                      <div className="bg-white/80 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm w-full">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Terminal className="w-5 h-5 text-indigo-650" />
+                          <div>
+                            <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>Admin Console Logger</h4>
+                            <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Real-time logs collected from reconstruction pipeline</p>
+                          </div>
+                        </div>
+
+                        <div className="w-full bg-slate-950 rounded-2xl p-4 text-[10px] font-mono text-gray-200 border border-slate-900 h-[360px] overflow-y-auto space-y-1 select-text">
+                          {extractionLogs.length === 0 ? (
+                            <p className="text-slate-500 italic">No logs recorded yet. Start a reconstruction queue to stream console lines.</p>
+                          ) : (
+                            extractionLogs.map((log, idx) => (
+                              <div key={idx} className="leading-relaxed whitespace-pre-wrap">
+                                {log}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {adminSubTab === 'settings' && (
+                      <div className="bg-white/80 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm w-full">
+                        <div className="flex items-center gap-2 mb-5 pb-4 border-b border-gray-150 dark:border-slate-800">
+                          <Settings className="w-5 h-5 text-indigo-650" />
+                          <div>
+                            <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>Admin Global Settings</h4>
+                            <p className="text-[10px] font-medium" style={{ color: 'var(--th-text3)' }}>Re-initialize services and run diagnostics manually</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-3" style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)' }}>
+                            <div>
+                              <p className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Reset Key Rotation Stats</p>
+                              <p className="text-[10.5px] mt-0.5" style={{ color: 'var(--th-text3)' }}>Clears active rotation histories and sets current index back to Key #1.</p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                ApiKeyManager.resetStatus();
+                                alert('Rotation histories reset!');
+                              }}
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shrink-0"
+                            >
+                              Reset Engine
+                            </button>
+                          </div>
+
+                          <div className="p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-3" style={{ background: 'var(--th-surface)', borderColor: 'var(--th-border)' }}>
+                            <div>
+                              <p className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Clear Local Telemetry Backup</p>
+                              <p className="text-[10.5px] mt-0.5" style={{ color: 'var(--th-text3)' }}>Forces reload of verification states and empties browser caches.</p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                window.localStorage.clear();
+                                alert('Local telemetry cache cleared. Reload page.');
+                              }}
+                              className="px-4 py-2 bg-rose-600 hover:bg-rose-750 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shrink-0"
+                            >
+                              Clear Cache
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {adminSubTab === 'health' && (
+                      <div className="bg-white/80 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm w-full flex flex-col gap-6">
+                        {/* Header */}
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-gray-150 dark:border-slate-800">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-rose-50 dark:bg-rose-950/20 text-rose-600 rounded-xl">
+                              <HeartPulse className="w-6 h-6 animate-pulse" />
+                            </div>
+                            <div>
+                              <h3 className="font-display font-bold text-base" style={{ color: 'var(--th-text)' }}>Data Health Check</h3>
+                              <p className="text-xs font-medium" style={{ color: 'var(--th-text3)' }}>Scan and clear redundant case diary records while preserving originals</p>
+                            </div>
+                          </div>
+                          {!isScanning && (
+                            <button
+                              onClick={runHealthScan}
+                              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-750 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              Scan Database
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Scanner Loading State */}
+                        {isScanning && (
+                          <div className="p-6 rounded-2xl border bg-gray-50/50 dark:bg-slate-900/40 border-gray-150 dark:border-slate-800 flex flex-col items-center justify-center gap-4 text-center">
+                            <RefreshCw className="w-8 h-8 text-rose-600 animate-spin" />
+                            <div className="space-y-1">
+                              <h4 className="text-sm font-bold" style={{ color: 'var(--th-text)' }}>Scanning Database...</h4>
+                              <p className="text-xs" style={{ color: 'var(--th-text4)' }}>Estimating duplicate groups in case registers</p>
+                            </div>
+                            {/* Custom progress indicators */}
+                            <div className="w-full max-w-xs space-y-2 mt-2">
+                              <div className="w-full bg-gray-200 dark:bg-slate-800 h-2.5 rounded-full overflow-hidden">
+                                <div className="bg-rose-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${scanProgress}%` }} />
+                              </div>
+                              <div className="flex justify-between text-[10px] font-bold" style={{ color: 'var(--th-text4)' }}>
+                                <span>{scanProgress}% Completed</span>
+                                <span>{scannedCount.toLocaleString()} / {totalToScan.toLocaleString()} Scanned</span>
+                              </div>
+                              <div className="flex justify-between text-[9px] font-bold text-gray-500 uppercase">
+                                <span>Duplicate Groups: {duplicateGroups.length}</span>
+                                <span>ETA: {estTimeSecs}s</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Scan Results Dashboard */}
+                        {healthStats.totalRecords > 0 && !isScanning && (
+                          <div className="space-y-6">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Total Records</p>
+                                <p className="text-xl font-display font-bold mt-0.5" style={{ color: 'var(--th-text)' }}>{healthStats.totalRecords}</p>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Unique Records</p>
+                                <p className="text-xl font-display font-bold text-green-600 mt-0.5">{healthStats.uniqueRecords}</p>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Duplicate Groups</p>
+                                <p className="text-xl font-display font-bold text-amber-600 mt-0.5">{healthStats.duplicateGroupsCount}</p>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Duplicate Entries</p>
+                                <p className="text-xl font-display font-bold text-rose-600 mt-0.5">{healthStats.totalDuplicatesCount}</p>
+                              </div>
+                            </div>
+
+                            <div className="p-4 rounded-2xl border grid grid-cols-1 sm:grid-cols-3 gap-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                              <div className="text-center sm:text-left border-b sm:border-b-0 sm:border-r border-gray-200/50 dark:border-slate-800 pb-3 sm:pb-0 sm:pr-4">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Health Score</p>
+                                <p className={`text-2xl font-display font-bold mt-1 ${healthStats.score >= 90 ? 'text-green-600' : healthStats.score >= 70 ? 'text-amber-600' : 'text-rose-600'}`}>
+                                  {healthStats.score}%
+                                </p>
+                              </div>
+                              <div className="text-center sm:text-left border-b sm:border-b-0 sm:border-r border-gray-200/50 dark:border-slate-800 pb-3 sm:pb-0 sm:px-4">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Scan Duration</p>
+                                <p className="text-sm font-bold mt-2" style={{ color: 'var(--th-text)' }}>{healthStats.scanTimeMs} ms</p>
+                                <p className="text-[9px]" style={{ color: 'var(--th-text4)' }}>Last Scan: {healthStats.lastScanDate}</p>
+                              </div>
+                              <div className="text-center sm:text-left sm:pl-4">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Removed Duplicates</p>
+                                <p className="text-lg font-bold mt-1 text-indigo-600">{healthStats.removedCount} entries</p>
+                              </div>
+                            </div>
+
+                            {/* Search and Filters */}
+                            <div className="p-4 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-2xl space-y-3">
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                                <div className="flex-1 relative">
+                                  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
+                                  <input
+                                    type="text"
+                                    placeholder="Search by Police Station, Crime Number, ID..."
+                                    value={healthSearch}
+                                    onChange={(e) => setHealthSearch(e.target.value)}
+                                    className="w-full pl-9 pr-4 py-2 border rounded-xl text-xs focus:outline-none"
+                                    style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                                  />
+                                </div>
+                                <div className="flex gap-2 shrink-0">
+                                  <button onClick={() => {
+                                    const csv = "data:text/csv;charset=utf-8," + 
+                                      "Police Station,Crime Number,Duplicate Count,Record IDs,Created Dates\n" +
+                                      duplicateGroups.map(g => `"${g.policeStation}","${g.crimeNumber}",${g.totalCount},"${[g.originalRecord.id, ...g.duplicates.map(d => d.id)].join('; ')}","${[g.originalRecord.dateOfCd || '', ...g.duplicates.map(d => d.dateOfCd || '')].join('; ')}"`).join('\n');
+                                    const link = document.createElement("a");
+                                    link.href = encodeURI(csv);
+                                    link.download = `Health_Cleanup_Report_${Date.now()}.csv`;
+                                    link.click();
+                                  }} className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300 border border-emerald-200/50 hover:bg-emerald-100 text-[10px] font-bold py-1.5 px-3 rounded-lg cursor-pointer">
+                                    CSV
+                                  </button>
+                                  <button onClick={() => {
+                                    let html = "<html><head><meta charset='utf-8'></head><body><table>" +
+                                      "<tr><th>Police Station</th><th>Crime Number</th><th>Duplicate Count</th><th>Record IDs</th><th>Created Dates</th></tr>" +
+                                      duplicateGroups.map(g => `<tr><td>${g.policeStation}</td><td>${g.crimeNumber}</td><td>${g.totalCount}</td><td>${[g.originalRecord.id, ...g.duplicates.map(d => d.id)].join('; ')}</td><td>${[g.originalRecord.dateOfCd || '', ...g.duplicates.map(d => d.dateOfCd || '')].join('; ')}</td></tr>`).join('') +
+                                      "</table></body></html>";
+                                    const link = document.createElement("a");
+                                    link.href = URL.createObjectURL(new Blob([html], { type: 'application/vnd.ms-excel' }));
+                                    link.download = `Health_Cleanup_Report_${Date.now()}.xls`;
+                                    link.click();
+                                  }} className="bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-300 border border-blue-200/50 hover:bg-blue-100 text-[10px] font-bold py-1.5 px-3 rounded-lg cursor-pointer">
+                                    Excel
+                                  </button>
+                                  <button onClick={() => {
+                                    let text = `DATA HEALTH CLEANUP REPORT\nGenerated: ${new Date().toLocaleString()}\n\n`;
+                                    duplicateGroups.forEach((g, i) => {
+                                      text += `${i+1}. PS: ${g.policeStation} | Crime: ${g.crimeNumber} (Count: ${g.totalCount})\n`;
+                                      text += `   Original ID: ${g.originalRecord.id}\n`;
+                                      g.duplicates.forEach(d => { text += `   - Duplicate ID: ${d.id}\n`; });
+                                      text += '\n';
+                                    });
+                                    const link = document.createElement("a");
+                                    link.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+                                    link.download = `Health_Cleanup_Report_${Date.now()}.txt`;
+                                    link.click();
+                                  }} className="bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-300 border border-rose-200/50 hover:bg-rose-100 text-[10px] font-bold py-1.5 px-3 rounded-lg cursor-pointer">
+                                    PDF Report
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-gray-100 dark:border-slate-800">
+                                <div>
+                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Police Station</label>
+                                  <select value={healthStation} onChange={(e) => setHealthStation(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
+                                    <option value="all">All Stations</option>
+                                    {Array.from(new Set(duplicateGroups.map(g => g.policeStation).filter(Boolean))).map(st => (
+                                      <option key={st} value={st}>{st}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Year</label>
+                                  <select value={healthYear} onChange={(e) => setHealthYear(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
+                                    <option value="all">All Years</option>
+                                    {Array.from(new Set(duplicateGroups.map(g => g.crimeNumber.split('/')[1]).filter(Boolean))).map(yr => (
+                                      <option key={yr} value={yr}>{yr}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Court Name</label>
+                                  <select value={healthCourt} onChange={(e) => setHealthCourt(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
+                                    <option value="all">All Courts</option>
+                                    {Array.from(new Set(duplicateGroups.flatMap(g => [g.originalRecord.courtNameAndPlace, ...g.duplicates.map(d => d.courtNameAndPlace)]).filter(Boolean))).map(crt => (
+                                      <option key={crt} value={crt}>{crt}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Investigating Officer</label>
+                                  <select value={healthOfficer} onChange={(e) => setHealthOfficer(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
+                                    <option value="all">All Officers</option>
+                                    {Array.from(new Set(duplicateGroups.flatMap(g => [g.originalRecord.attendedBy, ...g.duplicates.map(d => d.attendedBy)]).filter(Boolean))).map(off => (
+                                      <option key={off} value={off}>{off}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Bulk Removal Button */}
+                            {filteredGroups.length > 0 && (
+                              <div className="flex justify-end pt-2">
+                                <button
+                                  onClick={handleBulkRemoveAll}
+                                  className="w-full sm:w-auto px-5 py-3 bg-rose-600 hover:bg-rose-750 text-white rounded-xl text-xs font-bold transition-all shadow flex items-center justify-center gap-2 cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  Remove All Safe Duplicates
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Duplicates Table */}
+                            <div className="border rounded-2xl overflow-hidden shadow-xs" style={{ borderColor: 'var(--th-border)' }}>
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs border-collapse">
+                                  <thead>
+                                    <tr style={{ background: 'var(--th-surface2)', borderBottom: '1px solid var(--th-border)' }}>
+                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Police Station</th>
+                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Crime Number</th>
+                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Duplicate Count</th>
+                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Oldest Date</th>
+                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Last Updated</th>
+                                      <th className="p-3.5 font-bold uppercase text-[9px] text-right" style={{ color: 'var(--th-text3)' }}>Action</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {filteredGroups.length === 0 ? (
+                                      <tr>
+                                        <td colSpan={6} className="p-8 text-center italic text-gray-500">No duplicates found matching filters.</td>
+                                      </tr>
+                                    ) : (
+                                      filteredGroups.map((g) => {
+                                        const isExpanded = expandedGroupKeys.has(g.id);
+                                        return (
+                                          <React.Fragment key={g.id}>
+                                            <tr
+                                              onClick={() => {
+                                                const nextKeys = new Set(expandedGroupKeys);
+                                                if (isExpanded) nextKeys.delete(g.id);
+                                                else nextKeys.add(g.id);
+                                                setExpandedGroupKeys(nextKeys);
+                                              }}
+                                              className="border-b border-gray-150/40 dark:border-slate-800 hover:bg-gray-50/50 dark:hover:bg-slate-900/30 cursor-pointer"
+                                              style={{ background: 'var(--th-card-bg)' }}
+                                            >
+                                              <td className="p-3.5 font-semibold" style={{ color: 'var(--th-text)' }}>{g.policeStation}</td>
+                                              <td className="p-3.5 font-mono font-bold text-gray-900 dark:text-gray-100">{g.crimeNumber}</td>
+                                              <td className="p-3.5">
+                                                <span className="px-2 py-0.5 font-bold rounded-full text-[10px] bg-red-100 text-red-700">
+                                                  {g.totalCount} entries
+                                                </span>
+                                              </td>
+                                              <td className="p-3.5" style={{ color: 'var(--th-text3)' }}>{g.createdDate}</td>
+                                              <td className="p-3.5" style={{ color: 'var(--th-text3)' }}>{g.lastUpdated}</td>
+                                              <td className="p-3.5 text-right flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                  onClick={() => setSelectedGroupForCompare(g)}
+                                                  className="p-1 px-2 border hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg font-bold text-[10px] cursor-pointer"
+                                                >
+                                                  Compare
+                                                </button>
+                                                <button
+                                                  onClick={() => handleRemoveGroupDuplicates(g)}
+                                                  className="p-1 px-2 bg-rose-600 hover:bg-rose-750 text-white rounded-lg font-bold text-[10px] cursor-pointer"
+                                                >
+                                                  Clean
+                                                </button>
+                                              </td>
+                                            </tr>
+
+                                            {/* Expandable Case Details Subtable */}
+                                            {isExpanded && (
+                                              <tr>
+                                                <td colSpan={6} className="bg-gray-50/40 dark:bg-slate-900/10 p-4 border-b border-gray-200/50">
+                                                  <div className="border rounded-xl overflow-hidden" style={{ borderColor: 'var(--th-border)' }}>
+                                                    <table className="w-full text-[11px] text-left border-collapse bg-white dark:bg-slate-900">
+                                                      <thead>
+                                                        <tr style={{ background: 'var(--th-surface2)', borderBottom: '1px solid var(--th-border)' }}>
+                                                          <th className="p-2.5 font-bold text-[9px] uppercase">Record ID</th>
+                                                          <th className="p-2.5 font-bold text-[9px] uppercase">Date of CD</th>
+                                                          <th className="p-2.5 font-bold text-[9px] uppercase">Investigating Officer</th>
+                                                          <th className="p-2.5 font-bold text-[9px] uppercase">Court Name</th>
+                                                          <th className="p-2.5 font-bold text-[9px] uppercase">Status</th>
+                                                          <th className="p-2.5 font-bold text-[9px] uppercase">Role Badge</th>
+                                                        </tr>
+                                                      </thead>
+                                                      <tbody>
+                                                        {[g.originalRecord, ...g.duplicates].map((rec, idx) => (
+                                                          <tr key={rec.id} className="border-b border-gray-100 last:border-0">
+                                                            <td className="p-2.5 font-mono text-[9.5px] truncate max-w-[120px]" title={rec.id}>
+                                                              {rec.id} {idx === 0 && <span className="ml-1 px-1 bg-green-100 text-green-700 font-bold rounded text-[8px]">ORIGINAL (OLDEST)</span>}
+                                                            </td>
+                                                            <td className="p-2.5">{rec.dateOfCd}</td>
+                                                            <td className="p-2.5 font-semibold">{rec.attendedBy || 'N/A'}</td>
+                                                            <td className="p-2.5 text-gray-500">{rec.courtNameAndPlace || 'N/A'}</td>
+                                                            <td className="p-2.5 font-bold text-indigo-650">{rec.stageOfTheCase}</td>
+                                                            <td className="p-2.5">
+                                                              <span className="text-[9px] px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-bold uppercase">
+                                                                {rec.dbId ? 'Cloud Persisted' : 'Local'}
+                                                              </span>
+                                                            </td>
+                                                          </tr>
+                                                        ))}
+                                                      </tbody>
+                                                    </table>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            )}
+                                          </React.Fragment>
+                                        );
+                                      })
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+
+                            {/* Backups and Audits Trail */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-gray-150 dark:border-slate-800">
+                              {/* Safety Restore Backups */}
+                              <div className="space-y-3">
+                                <h4 className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: 'var(--th-text2)' }}>
+                                  <History className="w-4 h-4 text-emerald-600" />
+                                  Safety Restore Registry
+                                </h4>
+                                <div className="border rounded-2xl overflow-hidden max-h-[220px] overflow-y-auto" style={{ borderColor: 'var(--th-border)' }}>
+                                  {backupsList.length === 0 ? (
+                                    <p className="p-6 text-center text-xs italic text-gray-400">No backup records configured.</p>
+                                  ) : (
+                                    backupsList.map(bk => (
+                                      <div key={bk.id} className="p-3 border-b border-gray-100 last:border-0 flex items-center justify-between text-[11px]" style={{ background: 'var(--th-surface)' }}>
+                                        <div className="space-y-0.5 min-w-0 pr-2">
+                                          <p className="font-bold truncate text-gray-800 dark:text-gray-200">{bk.description}</p>
+                                          <p className="text-[9.5px] text-gray-400 font-mono">By: {bk.adminEmail} | {new Date(bk.timestamp).toLocaleString()}</p>
+                                        </div>
+                                        <button
+                                          onClick={() => handleRestoreBackup(bk.id)}
+                                          className="p-1 px-2.5 bg-emerald-600 hover:bg-emerald-750 text-white rounded-lg font-bold text-[10px] shrink-0 cursor-pointer"
+                                        >
+                                          Restore
+                                        </button>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Admin Action Audit Trails */}
+                              <div className="space-y-3">
+                                <h4 className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: 'var(--th-text2)' }}>
+                                  <Terminal className="w-4 h-4 text-indigo-650" />
+                                  Action Audit Trails
+                                </h4>
+                                <div className="border rounded-2xl overflow-hidden max-h-[220px] overflow-y-auto" style={{ borderColor: 'var(--th-border)' }}>
+                                  {auditLogsList.length === 0 ? (
+                                    <p className="p-6 text-center text-xs italic text-gray-400">No audit log entries recorded yet.</p>
+                                  ) : (
+                                    auditLogsList.map(ad => (
+                                      <div key={ad.id} className="p-3 border-b border-gray-100 last:border-0 text-[10.5px] leading-relaxed" style={{ background: 'var(--th-surface)', color: 'var(--th-text3)' }}>
+                                        <span className="font-semibold text-gray-900 dark:text-gray-100">{ad.action}</span>
+                                        <div className="flex flex-wrap gap-x-2 text-[9px] text-gray-400 font-mono mt-0.5">
+                                          <span>User: {ad.adminEmail}</span>
+                                          <span>IP: {ad.ipAddress}</span>
+                                          <span>Time: {new Date(ad.timestamp).toLocaleTimeString()}</span>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -4145,14 +4826,111 @@ export default function App() {
               </span>
             )}
           </button>
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer`}
-            style={{ color: activeTab === 'dashboard' ? 'var(--th-primary)' : 'var(--th-text4)' }}
+          {roleInfo.level === 'admin' && (
+            <button
+              onClick={() => setActiveTab('dashboard')}
+              className={`flex flex-col items-center gap-1 text-[9px] font-bold transition-all cursor-pointer`}
+              style={{ color: activeTab === 'dashboard' ? 'var(--th-primary)' : 'var(--th-text4)' }}
+            >
+              <Shield className="w-5 h-5" />
+              Admin
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Duplicate Comparison Modal */}
+      {selectedGroupForCompare && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md bg-black/40">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-3xl p-6 shadow-2xl border flex flex-col gap-5"
+            style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
           >
-            <Shield className="w-5 h-5" />
-            Admin
-          </button>
+            <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: 'var(--th-border)' }}>
+              <div>
+                <h3 className="font-display font-semibold text-base" style={{ color: 'var(--th-text)' }}>
+                  Duplicate Record Comparison
+                </h3>
+                <p className="text-xs" style={{ color: 'var(--th-text3)' }}>
+                  Comparing entries for PS: <strong>{selectedGroupForCompare.policeStation}</strong> | Crime No: <strong>{selectedGroupForCompare.crimeNumber}</strong>
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedGroupForCompare(null)}
+                className="text-gray-400 hover:text-gray-655 font-bold text-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr style={{ background: 'var(--th-surface2)', borderBottom: '1px solid var(--th-border)' }}>
+                    <th className="p-3 font-bold uppercase text-[9px] w-1/4">Field</th>
+                    <th className="p-3 font-bold uppercase text-[9px] w-3/8 text-green-700 bg-green-500/5">Original Record (Oldest)</th>
+                    <th className="p-3 font-bold uppercase text-[9px] w-3/8 text-rose-700 bg-rose-500/5">Duplicate Record (Newer)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {([
+                    { label: 'Record ID', field: 'id' },
+                    { label: 'Police Station', field: 'policeStation' },
+                    { label: 'Crime No & Sec of Law', field: 'crNoAndSecOfLaw' },
+                    { label: 'Date of CD', field: 'dateOfCd' },
+                    { label: 'District', field: 'district' },
+                    { label: 'Attended By / IO', field: 'attendedBy' },
+                    { label: 'Court Name', field: 'courtNameAndPlace' },
+                    { label: 'Stage of the Case', field: 'stageOfTheCase' },
+                    { label: 'Posted For', field: 'postedFor' },
+                    { label: 'Next Hearing Date', field: 'nextHearingDate' },
+                    { label: 'Complainant', field: 'complainant' }
+                  ] as const).map((col) => {
+                    const originalVal = String((selectedGroupForCompare.originalRecord as any)[col.field] || '');
+                    const duplicateVal = String((selectedGroupForCompare.duplicates[0] as any)[col.field] || '');
+                    const isDifferent = originalVal !== duplicateVal;
+
+                    return (
+                      <tr key={col.field} className="border-b border-gray-100 last:border-0">
+                        <td className="p-3 font-bold text-gray-500">{col.label}</td>
+                        <td className="p-3 font-medium bg-green-500/5" style={{ color: 'var(--th-text)' }}>
+                          {originalVal || <span className="text-gray-400 italic">Empty</span>}
+                        </td>
+                        <td className={`p-3 font-semibold ${isDifferent ? 'bg-amber-500/10 text-amber-900 border border-amber-200/50' : 'bg-rose-500/5'}`}>
+                          {duplicateVal || <span className="text-gray-400 italic">Empty</span>}
+                          {isDifferent && (
+                            <span className="block text-[8px] font-bold text-amber-600 uppercase mt-1">Difference Detected</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end gap-3 border-t pt-3" style={{ borderColor: 'var(--th-border)' }}>
+              <button
+                onClick={() => setSelectedGroupForCompare(null)}
+                className="px-4 py-2 border rounded-xl text-xs font-bold hover:bg-gray-50 cursor-pointer"
+                style={{ color: 'var(--th-text2)' }}
+              >
+                Close Comparison
+              </button>
+              <button
+                onClick={() => {
+                  handleRemoveGroupDuplicates(selectedGroupForCompare);
+                  setSelectedGroupForCompare(null);
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-750 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Remove Duplicates
+              </button>
+            </div>
+          </motion.div>
         </div>
       )}
 
