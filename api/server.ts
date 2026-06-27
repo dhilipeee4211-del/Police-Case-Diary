@@ -1759,7 +1759,133 @@ app.post('/api/health/cleanup', async (req, res) => {
 });
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MONITORING API ENDPOINTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/monitor/session — latest extraction session for a user
+app.get('/api/monitor/session', async (req, res) => {
+  if (!supabaseServerClient) return res.status(503).json({ success: false, error: 'Supabase not configured.' });
+  const { userId } = req.query;
+  try {
+    const { data, error } = await supabaseServerClient
+      .from('case_diary_extraction_sessions')
+      .select('*')
+      .eq('user_id', userId as string)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return res.json({ success: true, session: data });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/monitor/chunks — all chunks for a session
+app.get('/api/monitor/chunks', async (req, res) => {
+  if (!supabaseServerClient) return res.status(503).json({ success: false, error: 'Supabase not configured.' });
+  const { sessionId } = req.query;
+  try {
+    const { data, error } = await supabaseServerClient
+      .from('case_diary_extraction_chunks')
+      .select('*')
+      .eq('session_id', sessionId as string)
+      .order('chunk_index', { ascending: true });
+    if (error) throw error;
+    return res.json({ success: true, chunks: data || [] });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/monitor/logs — latest N system activity log entries
+app.get('/api/monitor/logs', async (req, res) => {
+  if (!supabaseServerClient) return res.status(503).json({ success: false, error: 'Supabase not configured.' });
+  const limit = Math.min(Number(req.query.limit) || 200, 500);
+  const sessionId = req.query.sessionId as string | undefined;
+  try {
+    let query = supabaseServerClient
+      .from('system_activity_logs')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .limit(limit);
+    if (sessionId) query = query.eq('session_id', sessionId);
+    const { data, error } = await query;
+    if (error) throw error;
+    return res.json({ success: true, logs: (data || []).reverse() });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/monitor/stats — aggregated database activity counts
+app.get('/api/monitor/stats', async (req, res) => {
+  if (!supabaseServerClient) return res.status(503).json({ success: false, error: 'Supabase not configured.' });
+  try {
+    const [
+      { count: backupCount },
+      { count: sessionCount },
+      { count: chunkCount },
+      { count: importedChunks },
+      { count: pendingChunks },
+    ] = await Promise.all([
+      supabaseServerClient.from('case_diary_duplicate_backup').select('id', { count: 'exact', head: true }),
+      supabaseServerClient.from('case_diary_extraction_sessions').select('id', { count: 'exact', head: true }),
+      supabaseServerClient.from('case_diary_extraction_chunks').select('id', { count: 'exact', head: true }),
+      supabaseServerClient.from('case_diary_extraction_chunks').select('id', { count: 'exact', head: true }).eq('database_saved', true),
+      supabaseServerClient.from('case_diary_extraction_chunks').select('id', { count: 'exact', head: true }).eq('import_status', 'pending'),
+    ]);
+    return res.json({
+      success: true,
+      stats: {
+        backupRecords: backupCount || 0,
+        totalSessions: sessionCount || 0,
+        totalChunks: chunkCount || 0,
+        importedChunks: importedChunks || 0,
+        pendingImports: pendingChunks || 0,
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/monitor/sync — batch upsert of session + chunks + logs from client
+app.post('/api/monitor/sync', async (req, res) => {
+  if (!supabaseServerClient) return res.status(503).json({ success: false, error: 'Supabase not configured.' });
+  const { session, chunks, logs } = req.body || {};
+  try {
+    // Upsert session row
+    if (session?.id) {
+      await supabaseServerClient
+        .from('case_diary_extraction_sessions')
+        .upsert(session, { onConflict: 'id' });
+    }
+    // Upsert chunk rows (max 200 at once)
+    if (Array.isArray(chunks) && chunks.length > 0) {
+      const batch = chunks.slice(0, 200);
+      await supabaseServerClient
+        .from('case_diary_extraction_chunks')
+        .upsert(batch, { onConflict: 'id' });
+    }
+    // Insert log rows (max 100 at once, no upsert — IDs are unique per call)
+    if (Array.isArray(logs) && logs.length > 0) {
+      const logBatch = logs.slice(0, 100);
+      await supabaseServerClient
+        .from('system_activity_logs')
+        .insert(logBatch);
+    }
+    return res.json({ success: true });
+  } catch (err: any) {
+    // Non-fatal: return success to prevent client retry loops
+    console.warn('[Monitor Sync] Batch sync error (non-fatal):', err.message);
+    return res.json({ success: false, error: err.message });
+  }
+});
+
 // Error handling middleware for clean JSON errors instead of HTML fallback
+
 
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Express global error handler:', err);

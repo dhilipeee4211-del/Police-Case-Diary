@@ -84,5 +84,90 @@ CREATE POLICY "Allow delete for all" ON database_access FOR DELETE USING (true);
 CREATE POLICY "Allow select for backup" ON case_diary_duplicate_backup FOR SELECT USING (true);
 CREATE POLICY "Allow insert for backup" ON case_diary_duplicate_backup FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow delete for backup" ON case_diary_duplicate_backup FOR DELETE USING (true);
+
+-- ── Extraction Monitoring Tables ─────────────────────────────────────────────
+
+-- case_diary_extraction_sessions: one row per PDF extraction run
+CREATE TABLE IF NOT EXISTS case_diary_extraction_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  user_email TEXT,
+  pdf_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'idle',
+  total_pages INTEGER DEFAULT 0,
+  processed_pages INTEGER DEFAULT 0,
+  total_chunks INTEGER DEFAULT 0,
+  current_chunk INTEGER DEFAULT 0,
+  concurrency INTEGER DEFAULT 1,
+  chunk_size INTEGER DEFAULT 5,
+  speed_sec_per_page REAL DEFAULT 0,
+  avg_chunk_time_sec REAL DEFAULT 0,
+  elapsed_seconds INTEGER DEFAULT 0,
+  eta_seconds INTEGER DEFAULT 0,
+  db_id TEXT,
+  db_name TEXT,
+  device TEXT,
+  error TEXT,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL
+);
+
+-- case_diary_extraction_chunks: one row per processed chunk
+CREATE TABLE IF NOT EXISTS case_diary_extraction_chunks (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  start_page INTEGER NOT NULL,
+  end_page INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  database_saved BOOLEAN DEFAULT FALSE,
+  import_status TEXT DEFAULT 'pending',
+  processing_time_ms INTEGER DEFAULT 0,
+  api_key_label TEXT,
+  retry_count INTEGER DEFAULT 0,
+  updated_at BIGINT NOT NULL
+);
+
+-- case_diary_import_logs: import result summary per session
+CREATE TABLE IF NOT EXISTS case_diary_import_logs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  database_id TEXT,
+  imported_count INTEGER DEFAULT 0,
+  skipped_count INTEGER DEFAULT 0,
+  failed_count INTEGER DEFAULT 0,
+  duplicate_skipped INTEGER DEFAULT 0,
+  backup_created INTEGER DEFAULT 0,
+  speed_records_per_sec REAL DEFAULT 0,
+  created_at BIGINT NOT NULL
+);
+
+-- system_activity_logs: mirror of Logger entries for cross-device monitoring
+CREATE TABLE IF NOT EXISTS system_activity_logs (
+  id TEXT PRIMARY KEY,
+  level TEXT NOT NULL,
+  message TEXT NOT NULL,
+  category TEXT DEFAULT 'engine',
+  session_id TEXT,
+  timestamp BIGINT NOT NULL
+);
+
+-- Enable RLS on all new tables
+ALTER TABLE case_diary_extraction_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE case_diary_extraction_chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE case_diary_import_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE system_activity_logs ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies for case_diary_extraction_sessions
+CREATE POLICY "Allow all for sessions" ON case_diary_extraction_sessions FOR ALL USING (true) WITH CHECK (true);
+
+-- RLS policies for case_diary_extraction_chunks
+CREATE POLICY "Allow all for chunks" ON case_diary_extraction_chunks FOR ALL USING (true) WITH CHECK (true);
+
+-- RLS policies for case_diary_import_logs
+CREATE POLICY "Allow all for import_logs" ON case_diary_import_logs FOR ALL USING (true) WITH CHECK (true);
+
+-- RLS policies for system_activity_logs
+CREATE POLICY "Allow all for activity_logs" ON system_activity_logs FOR ALL USING (true) WITH CHECK (true);
 `;
 }

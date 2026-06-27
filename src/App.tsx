@@ -72,6 +72,7 @@ import { RecoveryManager } from './services/RecoveryManager';
 import { ProgressManager } from './services/ProgressManager';
 import { validateAndPlanImport, ImportValidationReport } from './services/ImportValidationService';
 import { BackupManagerService, DuplicateBackupRecord } from './services/BackupManagerService';
+import { ExtractionMonitorService, MonitorSnapshot } from './services/ExtractionMonitorService';
 
 // Helper functions for IndexedDB storage to bypass localStorage 5MB quota limit on large datasets/PDF chunks
 function saveToIndexedDB(key: string, value: any): Promise<void> {
@@ -515,6 +516,11 @@ export default function App() {
   const [recoveryQueue, setRecoveryQueue] = useState<any | null>(null);
 
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+  const [monitorSnapshot, setMonitorSnapshot] = useState<MonitorSnapshot | null>(null);
+  const [logFilter, setLogFilter] = useState<'all' | 'info' | 'warning' | 'error'>('all');
+
+  // Subscribe to live extraction monitor — always active, updates every second during extraction
+  useEffect(() => ExtractionMonitorService.subscribe(setMonitorSnapshot), []);
   const [concurrencyLimit, setConcurrencyLimit] = useState<number>(1);
   const [chunkSize, setChunkSize] = useState<number>(() => {
     return StorageManager.getLocalItem<number>('gateway_pages_per_chunk', 2);
@@ -2727,7 +2733,7 @@ export default function App() {
                           
                           {showAdvancedSettings && (
                             <div
-                              className="mt-3 space-y-3 pt-3 border-t flex flex-col"
+                              className="mt-3 space-y-4 pt-3 border-t flex flex-col"
                               style={{ borderColor: 'var(--th-border2)' }}
                             >
                               {/* Concurrency and Chunk Size */}
@@ -2766,294 +2772,366 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {/* Telemetry/API Key statuses */}
-                              {totalKeys > 0 && (
-                                <div className="p-3 rounded-2xl text-[10.5px] space-y-3 font-medium border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
-                                  
-                                  {/* Detailed Monitoring Dashboard */}
-                                  <div className="space-y-1.5 pb-2.5 border-b" style={{ borderColor: 'var(--th-border2)' }}>
-                                    <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
-                                      <span>Engine Status</span>
-                                      {isAllExhausted ? (
-                                        <span className="text-[9px] font-bold text-red-600 flex items-center gap-1">🔴 Paused</span>
-                                      ) : activeStatus?.status === 'retrying' ? (
-                                        <span className="text-[9px] font-bold text-orange-500 flex items-center gap-1 animate-pulse">🟠 Retrying</span>
-                                      ) : (
-                                        <span className="text-[9px] font-bold text-green-600 flex items-center gap-1">🟢 Rotation Active</span>
-                                      )}
-                                    </div>
 
-                                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 pt-1.5 text-[9.5px]" style={{ color: 'var(--th-text3)' }}>
-                                      <div className="flex justify-between">
-                                        <span>Current Active Key:</span>
-                                        <span className="font-bold">Key #{activeIndex + 1} of {totalKeys}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Rotation Mode:</span>
-                                        <span className="font-bold text-green-600">Automatic</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Current Page:</span>
-                                        <span className="font-bold font-mono">
-                                          {QueueManager.getStatus().state === 'processing' 
-                                            ? QueueManager.getStatus().processedPages + 1 
-                                            : activeStatus?.processing || 'N/A'}
-                                        </span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Current Batch:</span>
-                                        <span className="font-bold font-mono">
-                                          {QueueManager.getStatus().state === 'processing'
-                                            ? `${QueueManager.getStatus().currentChunkIndex + 1} / ${QueueManager.getStatus().totalChunks}`
-                                            : 'N/A'}
-                                        </span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Pages Per Chunk:</span>
-                                        <span className="font-bold">{chunkSize}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Retry Count:</span>
-                                        <span className="font-bold">{activeStatus?.retries || 0}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Total Keys:</span>
-                                        <span className="font-bold">{totalKeys}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Healthy Keys:</span>
-                                        <span className="font-bold text-green-600">
-                                          {ApiKeyManager.getKeyStatuses().filter(k => k.status === 'healthy' || k.status === 'active').length}
-                                        </span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Waiting Keys:</span>
-                                        <span className="font-bold text-amber-500">
-                                          {ApiKeyManager.getKeyStatuses().filter(k => k.status === 'waiting').length}
-                                        </span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Exhausted Keys:</span>
-                                        <span className="font-bold text-red-500">
-                                          {ApiKeyManager.getKeyStatuses().filter(k => k.status === 'quota_exhausted' || k.status === 'auth_failed').length}
-                                        </span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Successful Requests:</span>
-                                        <span className="font-bold text-green-600 font-mono">{ApiKeyManager.getSuccessfulRequestsCount()}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Failed Requests:</span>
-                                        <span className="font-bold text-red-500 font-mono">{ApiKeyManager.getFailedRequestsCount()}</span>
-                                      </div>
-                                      <div className="flex justify-between col-span-2">
-                                        <span>Last Key Switch:</span>
-                                        <span className="font-bold font-mono">{formatLastSwitch(lastSwitchTime)}</span>
-                                      </div>
-                                      <div className="flex justify-between col-span-2">
-                                        <span>Processing Speed:</span>
-                                        <span className="font-bold font-mono">
-                                          {QueueManager.getStatus().speed > 0 
-                                            ? `${(60 / QueueManager.getStatus().speed).toFixed(1)} sec/request` 
-                                            : '2.8 sec/request'}
-                                        </span>
-                                      </div>
-                                      <div className="flex justify-between col-span-2">
-                                        <span>Current Queue Status:</span>
-                                        <span className="font-bold">
-                                          {isExtracting ? 'Running' : isPaused ? 'Paused' : 'Idle'}
-                                        </span>
-                                      </div>
-                                    </div>
+                              {/* ═══ LIVE MONITORING DASHBOARD ═══ */}
+                              {(() => {
+                                const snap = monitorSnapshot;
+                                const qs = QueueManager.getStatus();
+                                const keyStatuses = ApiKeyManager.getKeyStatuses();
+                                const rotHistory = ApiKeyManager.getRotationHistory();
+
+                                // ── Helper: format seconds to HH:MM:SS ──
+                                const fmtSec = (s: number) => {
+                                  if (!s || s <= 0) return '00:00:00';
+                                  const h = Math.floor(s / 3600);
+                                  const m = Math.floor((s % 3600) / 60);
+                                  const sec = s % 60;
+                                  return [h, m, sec].map(v => String(v).padStart(2, '0')).join(':');
+                                };
+
+                                const fmtTime = (ts: number) =>
+                                  ts > 0 ? new Date(ts).toLocaleTimeString('en-US', { hour12: false }) : 'N/A';
+
+                                // ── Engine Status ──
+                                const engineState = snap?.status || qs.state;
+                                const engineBadge: Record<string, string> = {
+                                  processing: '🟢 Running',
+                                  idle: '🟡 Waiting',
+                                  retrying: '🟠 Retrying',
+                                  paused: '🔴 Paused',
+                                  cancelled: '⚫ Cancelled',
+                                  importing: '🔵 Importing',
+                                  completed: '✅ Completed',
+                                  error: '🔴 Error',
+                                };
+                                const engineBadgeColor: Record<string, string> = {
+                                  processing: 'text-green-600',
+                                  idle: 'text-amber-500',
+                                  retrying: 'text-orange-500',
+                                  paused: 'text-red-600',
+                                  cancelled: 'text-gray-500',
+                                  importing: 'text-blue-500',
+                                  completed: 'text-green-700',
+                                  error: 'text-red-600',
+                                };
+
+                                const healthLabel = (v: string) => {
+                                  const map: Record<string, string> = {
+                                    healthy: '🟢 Healthy', connected: '🟢 Connected',
+                                    running: '🟢 Running', saving: '🟢 Saving',
+                                    active: '🟢 Active', ready: '🟢 Ready',
+                                    degraded: '🟠 Degraded', disconnected: '🔴 Disconnected',
+                                    offline: '🔴 Offline', quota_exhausted: '🔴 Quota',
+                                    paused: '🔴 Paused', idle: '⚪ Idle', error: '🔴 Error',
+                                    building: '🔵 Building', imported: '✅ Imported',
+                                  };
+                                  return map[v] || v;
+                                };
+
+                                const filteredLogs = (snap?.logs || []).filter(l => {
+                                  if (logFilter === 'all') return true;
+                                  if (logFilter === 'info') return ['INFO', 'SYSTEM', 'AI', 'OCR', 'SUCCESS'].includes(l.type);
+                                  if (logFilter === 'warning') return l.type === 'WARNING';
+                                  if (logFilter === 'error') return l.type === 'ERROR';
+                                  return true;
+                                });
+
+                                const monRow = (label: string, value: React.ReactNode, valueClass = '') => (
+                                  <div key={label} className="flex justify-between items-center py-0.5">
+                                    <span style={{ color: 'var(--th-text4)' }}>{label}</span>
+                                    <span className={`font-bold font-mono text-right max-w-[55%] truncate ${valueClass}`} style={{ color: 'var(--th-text)' }}>{value}</span>
                                   </div>
+                                );
 
-                                  {/* Retry Monitoring Panel */}
-                                  {activeStatus?.status === 'retrying' && (
-                                    <div className="p-2 bg-orange-50/50 dark:bg-orange-950/10 border border-orange-250 dark:border-orange-900/30 rounded-xl space-y-1 text-[9.5px]">
-                                      <p className="font-bold text-orange-600 uppercase tracking-wider text-[8.5px]">Active Retry Monitor</p>
-                                      <div className="flex justify-between">
-                                        <span>Retry:</span>
-                                        <span className="font-bold">{activeStatus.currentRetry} / {activeStatus.maxRetry}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span>Next Retry:</span>
-                                        <span className="font-bold">{activeStatus.retryDelay} Seconds</span>
-                                      </div>
-                                      {activeStatus.lastRetryTime && (
-                                        <div className="flex justify-between">
-                                          <span>Last Retry Time:</span>
-                                          <span className="font-bold font-mono">{activeStatus.lastRetryTime}</span>
-                                        </div>
-                                      )}
+                                return (
+                                  <div className="space-y-2.5 text-[9.5px]">
+
+                                    {/* ── § 1: Engine Status Bar ── */}
+                                    <div className="flex items-center justify-between p-2.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                      <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Engine Status</span>
+                                      <span className={`text-[11px] font-extrabold ${engineBadgeColor[engineState] || 'text-gray-500'} ${engineState === 'processing' || engineState === 'retrying' ? 'animate-pulse' : ''}`}>
+                                        {engineBadge[engineState] || '⚪ Idle'}
+                                      </span>
                                     </div>
-                                  )}
 
-                                  {/* Final Failure Monitor Panel */}
-                                  {isAllExhausted && (
-                                    <div className="p-2.5 bg-red-50/50 dark:bg-red-950/10 border border-red-200 dark:border-red-900/30 rounded-xl space-y-1.5 text-[9.5px]">
-                                      <div className="flex justify-between items-center text-red-600 font-bold uppercase tracking-wider text-[8.5px]">
-                                        <span>Final Failure Summary</span>
-                                        <span>🔴 Paused</span>
-                                      </div>
-                                      <div className="border-t border-red-200 dark:border-red-900/30 pt-1 space-y-0.5">
-                                        <div className="flex justify-between text-red-650">
-                                          <span>Reason:</span>
-                                          <span className="font-semibold text-right">All Gemini API keys have reached their quota.</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                          <span>Detected Keys:</span>
-                                          <span className="font-bold">{totalKeys}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                          <span>Exhausted Keys:</span>
-                                          <span className="font-semibold text-red-500">
-                                            {ApiKeyManager.getKeyStatuses()
-                                              .filter(k => k.status === 'quota_exhausted' || k.status === 'auth_failed')
-                                              .map(k => k.key)
-                                              .join(', ') || 'None'}
-                                          </span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                          <span>Last Active Key:</span>
-                                          <span className="font-bold">Key #{activeIndex + 1}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                          <span>Completed Pages:</span>
-                                          <span className="font-bold font-mono">{QueueManager.getStatus().processedPages}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                          <span>Remaining Pages:</span>
-                                          <span className="font-bold font-mono">
-                                            {Math.max(0, QueueManager.getStatus().totalPages - QueueManager.getStatus().processedPages)}
-                                          </span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                          <span>Resume Available:</span>
-                                          <span className="font-bold text-green-600">YES</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                          <span>Resume Position:</span>
-                                          <span className="font-bold font-mono text-green-600">Page {QueueManager.getStatus().processedPages + 1}</span>
-                                        </div>
-                                      </div>
+                                    {/* ── § 2: Live Processing Metrics ── */}
+                                    <div className="p-2.5 rounded-xl border space-y-0.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                      <p className="text-[9px] font-bold uppercase tracking-wider pb-1 border-b mb-1.5" style={{ color: 'var(--th-text4)', borderColor: 'var(--th-border2)' }}>Live Processing</p>
+                                      {monRow('Current PDF', snap?.pdfName || (qs.state !== 'idle' ? 'Loading...' : 'None'))}
+                                      {monRow('Current Page', `${snap?.currentPage ?? qs.processedPages} / ${snap?.totalPages ?? qs.totalPages}`)}
+                                      {monRow('Current Chunk', `${(snap?.currentChunk ?? qs.currentChunkIndex) + 1} / ${snap?.totalChunks ?? qs.totalChunks}`)}
+                                      {monRow('Pages Per Chunk', String(chunkSize))}
+                                      {monRow('Queue Status', snap?.queueStatus ?? qs.state)}
+                                      {monRow('Processing Speed', snap?.speedSecPerPage ? `${snap.speedSecPerPage.toFixed(2)} sec/page` : (qs.speed > 0 ? `${(60 / qs.speed).toFixed(1)} sec/page` : '—'))}
+                                      {monRow('Avg Chunk Time', snap?.avgChunkTimeSec ? `${snap.avgChunkTimeSec.toFixed(1)} sec` : '—')}
+                                      {monRow('Elapsed Time', fmtSec(snap?.elapsedSeconds ?? qs.elapsedTime))}
+                                      {monRow('Estimated Remaining', fmtSec(snap?.etaSeconds ?? qs.eta))}
+                                      {monRow('Memory Usage (Est.)', `~${snap?.estimatedMemoryMB ?? 0} MB`)}
+                                      {snap?.sessionId && monRow('Session ID', snap.sessionId.substring(0, 20) + '...')}
+                                      {snap?.userEmail && monRow('Current User', snap.userEmail)}
                                     </div>
-                                  )}
 
-                                  {/* API Key Status Table */}
-                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500" style={{ color: 'var(--th-text4)' }}>API Key Status Table</p>
-                                    <div className="overflow-x-auto border rounded-xl" style={{ borderColor: 'var(--th-border2)' }}>
-                                      <table className="w-full text-left border-collapse text-[9px]">
-                                        <thead>
-                                          <tr className="bg-slate-50 dark:bg-slate-900 border-b font-bold" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text4)' }}>
-                                            <th className="p-1">Key</th>
-                                            <th className="p-1">Status</th>
-                                            <th className="p-1">Reason</th>
-                                            <th className="p-1 text-center">Reqs</th>
-                                            <th className="p-1 text-center">Retries</th>
-                                            <th className="p-1">Last Used</th>
-                                            <th className="p-1">Switch</th>
-                                            <th className="p-1">Page</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {ApiKeyManager.getKeyStatuses().map((status, idx) => {
-                                            let statusColor = 'text-gray-400';
-                                            let statusLabel = 'Unused';
-                                            switch (status.status) {
-                                              case 'active':
-                                                statusColor = 'text-green-600 font-bold';
-                                                statusLabel = '🟢 Active';
-                                                break;
-                                              case 'healthy':
-                                                statusColor = 'text-green-600';
-                                                statusLabel = '🟢 Healthy';
-                                                break;
-                                              case 'waiting':
-                                                statusColor = 'text-amber-500';
-                                                statusLabel = '🟡 Waiting';
-                                                break;
-                                              case 'initializing':
-                                                statusColor = 'text-blue-500';
-                                                statusLabel = '🔵 Init';
-                                                break;
-                                              case 'retrying':
-                                                statusColor = 'text-orange-500 animate-pulse';
-                                                statusLabel = '🟠 Retry';
-                                                break;
-                                              case 'quota_exhausted':
-                                                statusColor = 'text-red-650 font-bold';
-                                                statusLabel = '🔴 Exhausted';
-                                                break;
-                                              case 'auth_failed':
-                                                statusColor = 'text-red-750 font-bold';
-                                                statusLabel = '🔴 Auth Fail';
-                                                break;
-                                              case 'unused':
-                                              default:
-                                                statusColor = 'text-gray-450';
-                                                statusLabel = '⚪ Unused';
-                                                break;
-                                            }
-                                            return (
-                                              <tr key={idx} className="border-b" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text3)' }}>
-                                                <td className="p-1 font-semibold whitespace-nowrap">{status.key}</td>
-                                                <td className={`p-1 whitespace-nowrap ${statusColor}`}>{statusLabel}</td>
-                                                <td className="p-1 text-red-500 font-semibold">{status.reason || '-'}</td>
-                                                <td className="p-1 text-center font-mono">{status.requestsProcessed}</td>
-                                                <td className="p-1 text-center font-mono">{status.retries}</td>
-                                                <td className="p-1 whitespace-nowrap">{status.lastUsed > 0 ? new Date(status.lastUsed).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : '-'}</td>
-                                                <td className="p-1 whitespace-nowrap">{status.switchTime || '-'}</td>
-                                                <td className="p-1 font-mono">{status.processing || '-'}</td>
+                                    {/* ── § 3: Extraction Cache Status ── */}
+                                    <div className="p-2.5 rounded-xl border space-y-0.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                      <p className="text-[9px] font-bold uppercase tracking-wider pb-1 border-b mb-1.5" style={{ color: 'var(--th-text4)', borderColor: 'var(--th-border2)' }}>Extraction Cache Status</p>
+                                      {monRow('Session Status', engineBadge[engineState] || '⚪ Idle')}
+                                      {monRow('Completed Pages', String(snap?.completedPages ?? qs.processedPages))}
+                                      {monRow('Remaining Pages', String(snap?.remainingPages ?? Math.max(0, qs.totalPages - qs.processedPages)))}
+                                      {monRow('Last Database Save', fmtTime(snap?.lastDbSaveTime ?? 0))}
+                                      {monRow('Last Cache Update', fmtTime(snap?.lastCacheUpdateTime ?? 0))}
+                                      {monRow('Cache Size (Est.)', `~${snap?.cacheSizeKB ?? 0} KB`)}
+                                      {monRow('Chunk Cache Records', String(snap?.chunkCacheCount ?? 0))}
+                                      {monRow('Import Queue', String(snap?.importQueue ?? 0))}
+                                      {monRow('Auto Save', snap?.autoSaveEnabled ? '✅ Every chunk' : '❌ Disabled')}
+                                    </div>
+
+                                    {/* ── § 4: Chunk Cache Monitor Table ── */}
+                                    {(snap?.chunks?.length ?? 0) > 0 && (
+                                      <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--th-border2)' }}>
+                                        <div className="px-2.5 py-1.5 flex items-center justify-between" style={{ background: 'var(--th-surface2)' }}>
+                                          <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Chunk Cache Monitor</p>
+                                          <span className="text-[9px] font-mono" style={{ color: 'var(--th-text4)' }}>{snap?.chunks.filter(c => c.databaseSaved).length} / {snap?.chunks.length} saved</span>
+                                        </div>
+                                        <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: '180px' }}>
+                                          <table className="w-full text-left border-collapse text-[8.5px]">
+                                            <thead>
+                                              <tr className="sticky top-0 font-bold border-b" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)', color: 'var(--th-text4)' }}>
+                                                <th className="p-1 whitespace-nowrap">Chunk</th>
+                                                <th className="p-1 whitespace-nowrap">Pages</th>
+                                                <th className="p-1 whitespace-nowrap">Status</th>
+                                                <th className="p-1 whitespace-nowrap">DB Saved</th>
+                                                <th className="p-1 whitespace-nowrap">Import</th>
+                                                <th className="p-1 whitespace-nowrap">Time</th>
+                                                <th className="p-1 whitespace-nowrap">API Key</th>
+                                                <th className="p-1 text-center">Retries</th>
                                               </tr>
+                                            </thead>
+                                            <tbody>
+                                              {snap?.chunks.map(c => {
+                                                const statusIcon: Record<string, string> = {
+                                                  completed: '✅ Cached', processing: '🔄 Processing',
+                                                  retrying: '🟠 Retrying', failed: '❌ Failed', pending: '⏳ Waiting'
+                                                };
+                                                const statusColor: Record<string, string> = {
+                                                  completed: 'text-green-600', processing: 'text-blue-500 animate-pulse',
+                                                  retrying: 'text-orange-500', failed: 'text-red-500', pending: 'text-gray-400'
+                                                };
+                                                return (
+                                                  <tr key={c.chunkIndex} className="border-b" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text3)' }}>
+                                                    <td className="p-1 font-semibold">#{c.chunkIndex + 1}</td>
+                                                    <td className="p-1 font-mono whitespace-nowrap">{c.startPage}–{c.endPage}</td>
+                                                    <td className={`p-1 whitespace-nowrap font-semibold ${statusColor[c.status] || ''}`}>{statusIcon[c.status] || c.status}</td>
+                                                    <td className="p-1 text-center">{c.databaseSaved ? '✅' : '—'}</td>
+                                                    <td className="p-1 whitespace-nowrap">{c.importStatus === 'imported' ? '✅ Imported' : c.importStatus === 'failed' ? '❌ Failed' : '⏳ Pending'}</td>
+                                                    <td className="p-1 font-mono whitespace-nowrap">{c.processingTimeMs > 0 ? `${(c.processingTimeMs / 1000).toFixed(1)}s` : '—'}</td>
+                                                    <td className="p-1 whitespace-nowrap">{c.apiKeyLabel || '—'}</td>
+                                                    <td className="p-1 text-center font-mono">{c.retryCount}</td>
+                                                  </tr>
+                                                );
+                                              })}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* ── § 5: Database Activity ── */}
+                                    <div className="p-2.5 rounded-xl border space-y-0.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                      <p className="text-[9px] font-bold uppercase tracking-wider pb-1 border-b mb-1.5" style={{ color: 'var(--th-text4)', borderColor: 'var(--th-border2)' }}>Database Activity</p>
+                                      {monRow('Production Records', String(snap?.dbActivity.productionRecords ?? qs.diaries.length))}
+                                      {monRow('Cached Chunks', String(snap?.dbActivity.cachedChunks ?? 0))}
+                                      {monRow('Imported Chunks', String(snap?.dbActivity.importedChunks ?? 0))}
+                                      {monRow('Pending Imports', String(snap?.dbActivity.pendingImports ?? 0))}
+                                      {monRow('Duplicate Skipped', String(snap?.dbActivity.duplicateSkipped ?? 0))}
+                                      {monRow('Backup Records', String(snap?.dbActivity.backupRecords ?? 0))}
+                                      {monRow('Database Writes', String(snap?.dbActivity.databaseWrites ?? 0))}
+                                      {monRow('Database Failures', String(snap?.dbActivity.databaseFailures ?? 0), snap?.dbActivity.databaseFailures ? 'text-red-500' : '')}
+                                      {monRow('Last Insert Time', fmtTime(snap?.dbActivity.lastInsertTime ?? 0))}
+                                      {monRow('Last Update Time', fmtTime(snap?.dbActivity.lastUpdateTime ?? 0))}
+                                    </div>
+
+                                    {/* ── § 6: Gemini API Rotation ── */}
+                                    {totalKeys > 0 && (
+                                      <div className="p-2.5 rounded-xl border space-y-0.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                        <p className="text-[9px] font-bold uppercase tracking-wider pb-1 border-b mb-1.5" style={{ color: 'var(--th-text4)', borderColor: 'var(--th-border2)' }}>Gemini API Rotation</p>
+                                        {monRow('Rotation Mode', 'Automatic', 'text-green-600')}
+                                        {monRow('Configured Keys', String(totalKeys))}
+                                        {monRow('Healthy Keys', String(snap?.healthyKeys ?? keyStatuses.filter(k => k.status === 'healthy' || k.status === 'active').length), 'text-green-600')}
+                                        {monRow('Waiting Keys', String(snap?.waitingKeys ?? keyStatuses.filter(k => k.status === 'waiting').length), 'text-amber-500')}
+                                        {monRow('Exhausted Keys', String(snap?.exhaustedKeys ?? keyStatuses.filter(k => k.status === 'quota_exhausted' || k.status === 'auth_failed').length), 'text-red-500')}
+                                        {monRow('Current Active Key', `Key #${(snap?.activeKeyIndex ?? activeIndex) + 1} of ${totalKeys}`)}
+                                        {monRow('Current Model', snap?.currentModel ?? 'gemini-1.5-flash-latest')}
+                                        {monRow('Current Page', String(snap?.currentPage ?? qs.processedPages))}
+                                        {monRow('Last Key Switch', formatLastSwitch(lastSwitchTime))}
+                                        {monRow('Processing Speed', qs.speed > 0 ? `${(60 / qs.speed).toFixed(1)} sec/request` : '—')}
+
+                                        {/* Active Retry Monitor */}
+                                        {activeStatus?.status === 'retrying' && (
+                                          <div className="mt-1.5 p-2 rounded-xl border border-orange-200 space-y-0.5" style={{ background: 'rgba(251,146,60,0.07)' }}>
+                                            <p className="text-[8.5px] font-bold text-orange-500 uppercase tracking-wider">Active Retry</p>
+                                            {monRow('Retry', `${activeStatus.currentRetry} / ${activeStatus.maxRetry}`)}
+                                            {monRow('Next Retry In', `${activeStatus.retryDelay}s`)}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* ── § 7: Per-Key Status Cards ── */}
+                                    {totalKeys > 0 && (
+                                      <div className="space-y-1.5">
+                                        <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>API Key Status</p>
+                                        <div className="space-y-1.5">
+                                          {keyStatuses.map((kst, idx) => {
+                                            const cardColor = kst.status === 'active' || kst.status === 'healthy' ? 'border-green-300 dark:border-green-900' :
+                                              kst.status === 'quota_exhausted' || kst.status === 'auth_failed' ? 'border-red-300 dark:border-red-900' :
+                                              kst.status === 'retrying' ? 'border-orange-300' : 'border-gray-200 dark:border-gray-700';
+                                            const statusLabel = kst.status === 'active' ? '🟢 Active' :
+                                              kst.status === 'healthy' ? '🟢 Healthy' :
+                                              kst.status === 'quota_exhausted' ? '🔴 Quota Exhausted' :
+                                              kst.status === 'auth_failed' ? '🔴 Auth Failed' :
+                                              kst.status === 'retrying' ? '🟠 Retrying' :
+                                              kst.status === 'waiting' ? '🟡 Waiting' : '⚪ Unused';
+                                            const statusTextColor = kst.status === 'active' || kst.status === 'healthy' ? 'text-green-600' :
+                                              kst.status === 'quota_exhausted' || kst.status === 'auth_failed' ? 'text-red-500' :
+                                              kst.status === 'retrying' ? 'text-orange-500' :
+                                              kst.status === 'waiting' ? 'text-amber-500' : 'text-gray-400';
+                                            return (
+                                              <div key={idx} className={`p-2 rounded-xl border ${cardColor} space-y-0.5`} style={{ background: 'var(--th-surface2)' }}>
+                                                <div className="flex justify-between items-center">
+                                                  <span className="font-bold text-[9.5px]" style={{ color: 'var(--th-text)' }}>Key #{idx + 1}</span>
+                                                  <span className={`font-bold text-[9.5px] ${statusTextColor}`}>{statusLabel}</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-0.5">
+                                                  <div className="flex justify-between"><span style={{ color: 'var(--th-text4)' }}>Requests</span><span className="font-mono font-bold" style={{ color: 'var(--th-text)' }}>{kst.requestsProcessed}</span></div>
+                                                  <div className="flex justify-between"><span style={{ color: 'var(--th-text4)' }}>Retries</span><span className="font-mono font-bold" style={{ color: 'var(--th-text)' }}>{kst.retries}</span></div>
+                                                  <div className="flex justify-between col-span-2"><span style={{ color: 'var(--th-text4)' }}>Last Used</span><span className="font-mono font-bold" style={{ color: 'var(--th-text)' }}>{kst.lastUsed > 0 ? new Date(kst.lastUsed).toLocaleTimeString('en-US', { hour12: false }) : '—'}</span></div>
+                                                  {kst.reason && <div className="flex justify-between col-span-2"><span style={{ color: 'var(--th-text4)' }}>Last Error</span><span className="font-semibold text-red-500 truncate max-w-[70%]">{kst.reason}</span></div>}
+                                                  {kst.processing && <div className="flex justify-between col-span-2"><span style={{ color: 'var(--th-text4)' }}>Current Page</span><span className="font-mono font-bold" style={{ color: 'var(--th-text)' }}>{kst.processing}</span></div>}
+                                                </div>
+                                              </div>
                                             );
                                           })}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
+                                        </div>
+                                      </div>
+                                    )}
 
-                                  {/* API Rotation History */}
-                                  <div className="space-y-1">
-                                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500" style={{ color: 'var(--th-text4)' }}>API Rotation History</p>
-                                    <div className="overflow-x-auto border rounded-xl max-h-[110px] overflow-y-auto" style={{ borderColor: 'var(--th-border2)' }}>
-                                      <table className="w-full text-left border-collapse text-[9px]">
-                                        <thead>
-                                          <tr className="bg-slate-50 dark:bg-slate-900 border-b font-bold sticky top-0" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text4)' }}>
-                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Time</th>
-                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Key</th>
-                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Prev Status</th>
-                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">New Status</th>
-                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Reason</th>
-                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Page</th>
-                                            <th className="p-1 bg-slate-50 dark:bg-slate-900 text-center">Retries</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {ApiKeyManager.getRotationHistory().length === 0 ? (
-                                            <tr>
-                                              <td colSpan={7} className="p-2 text-center text-gray-400 italic">No rotation events.</td>
-                                            </tr>
-                                          ) : (
-                                            ApiKeyManager.getRotationHistory().map((event, idx) => (
-                                              <tr key={idx} className="border-b" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text3)' }}>
-                                                <td className="p-1 font-mono whitespace-nowrap">{event.time}</td>
-                                                <td className="p-1 font-semibold whitespace-nowrap">{event.keyNumber}</td>
-                                                <td className="p-1 whitespace-nowrap">{event.previousStatus}</td>
-                                                <td className="p-1 whitespace-nowrap">{event.newStatus}</td>
-                                                <td className="p-1 text-red-500 font-semibold">{event.reason}</td>
-                                                <td className="p-1 font-mono whitespace-nowrap">{event.page}</td>
-                                                <td className="p-1 font-mono text-center">{event.retries}</td>
+                                    {/* ── § 8: Live Terminal Log ── */}
+                                    <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--th-border2)' }}>
+                                      <div className="px-2.5 py-1.5 flex items-center justify-between flex-wrap gap-1" style={{ background: 'var(--th-surface2)' }}>
+                                        <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Live Terminal Log</p>
+                                        <div className="flex gap-1">
+                                          {(['all', 'info', 'warning', 'error'] as const).map(f => (
+                                            <button
+                                              key={f}
+                                              onClick={() => setLogFilter(f)}
+                                              className={`text-[8px] px-1.5 py-0.5 rounded-md font-bold uppercase transition-colors ${logFilter === f ? 'text-white' : ''}`}
+                                              style={logFilter === f ? { background: 'var(--th-primary)', color: '#fff' } : { background: 'var(--th-border2)', color: 'var(--th-text4)' }}
+                                            >{f}</button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      <div className="overflow-y-auto font-mono" style={{ maxHeight: '220px', background: 'var(--th-surface)' }}>
+                                        {filteredLogs.length === 0 ? (
+                                          <p className="p-2.5 text-center italic text-[8.5px]" style={{ color: 'var(--th-text4)' }}>No log entries yet. Start extraction to see live logs.</p>
+                                        ) : (
+                                          filteredLogs.slice(-200).map((l, i) => {
+                                            const lc = { ERROR: 'text-red-500', WARNING: 'text-amber-500', SUCCESS: 'text-green-600', SYSTEM: 'text-blue-500', AI: 'text-purple-500', OCR: 'text-cyan-500', INFO: 'text-gray-400' }[l.type] || 'text-gray-400';
+                                            return (
+                                              <div key={i} className={`flex gap-1.5 px-2 py-0.5 border-b text-[8.5px] leading-4 ${lc}`} style={{ borderColor: 'var(--th-border2)' }}>
+                                                <span className="shrink-0 opacity-60">{new Date(l.timestamp).toLocaleTimeString('en-US', { hour12: false })}</span>
+                                                <span className="shrink-0 font-bold w-[42px]">[{l.type.substring(0, 4)}]</span>
+                                                <span className="break-all">{l.message}</span>
+                                              </div>
+                                            );
+                                          })
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* ── § 9: Resume Information ── */}
+                                    {(snap?.resumeAvailable || isAllExhausted || qs.state === 'paused' || qs.state === 'error') && (
+                                      <div className="p-2.5 rounded-xl border space-y-0.5 border-amber-300 dark:border-amber-800" style={{ background: 'rgba(245,158,11,0.07)' }}>
+                                        <p className="text-[9px] font-bold text-amber-600 uppercase tracking-wider pb-1 border-b border-amber-200 mb-1.5">Resume Information</p>
+                                        {monRow('Resume Available', 'YES', 'text-green-600')}
+                                        {monRow('Resume From Page', String((snap?.resumeFromPage ?? qs.processedPages + 1)))}
+                                        {monRow('Resume From Chunk', String(snap?.resumeFromChunk ?? qs.currentChunkIndex))}
+                                        {monRow('Cached Chunks', String(snap?.cachedChunksCount ?? 0))}
+                                        {monRow('Remaining Chunks', String(snap?.remainingChunks ?? Math.max(0, qs.totalChunks - qs.currentChunkIndex)))}
+                                        {monRow('Reason', snap?.pauseReason || (isAllExhausted ? 'Quota Exceeded' : qs.error || 'Manual Pause'), 'text-red-500')}
+                                      </div>
+                                    )}
+
+                                    {/* ── § 10: Import Progress ── */}
+                                    {(snap?.importStats.cachedChunks ?? 0) > 0 && (
+                                      <div className="p-2.5 rounded-xl border space-y-0.5" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                        <p className="text-[9px] font-bold uppercase tracking-wider pb-1 border-b mb-1.5" style={{ color: 'var(--th-text4)', borderColor: 'var(--th-border2)' }}>Import Progress</p>
+                                        {monRow('Cached Chunks', String(snap?.importStats.cachedChunks ?? 0))}
+                                        {monRow('Imported Chunks', String(snap?.importStats.importedChunks ?? 0))}
+                                        {monRow('Pending Imports', String(snap?.importStats.pendingImports ?? 0))}
+                                        {monRow('Failed Imports', String(snap?.importStats.failedImports ?? 0), snap?.importStats.failedImports ? 'text-red-500' : '')}
+                                        {monRow('Duplicate Records Skipped', String(snap?.importStats.duplicateSkipped ?? 0))}
+                                        {monRow('Updated Existing', String(snap?.importStats.updatedExisting ?? 0))}
+                                        {monRow('Backup Records Created', String(snap?.importStats.backupCreated ?? 0))}
+                                        {monRow('Import Speed', snap?.importStats.speedRecordsPerSec ? `${snap.importStats.speedRecordsPerSec} records/sec` : '—')}
+                                      </div>
+                                    )}
+
+                                    {/* ── § 11: Health Indicators ── */}
+                                    <div className="p-2.5 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                      <p className="text-[9px] font-bold uppercase tracking-wider pb-1.5 border-b mb-2" style={{ color: 'var(--th-text4)', borderColor: 'var(--th-border2)' }}>Health Indicators</p>
+                                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                        {[
+                                          ['Extraction Engine', snap?.health.extractionEngine ?? (qs.state === 'processing' ? 'healthy' : 'offline')],
+                                          ['Database Connection', snap?.health.databaseConnection ?? 'connected'],
+                                          ['Supabase', snap?.health.supabase ?? 'healthy'],
+                                          ['Gemini API', snap?.health.geminiApi ?? (isAllExhausted ? 'quota_exhausted' : 'connected')],
+                                          ['Queue', snap?.health.queue ?? qs.state],
+                                          ['Cache', snap?.health.cache ?? 'idle'],
+                                          ['Import Engine', snap?.health.importEngine ?? 'idle'],
+                                          ['Search Index', snap?.health.searchIndex ?? 'ready'],
+                                        ].map(([label, val]) => (
+                                          <div key={label as string} className="flex justify-between items-center gap-1">
+                                            <span className="truncate" style={{ color: 'var(--th-text4)' }}>{label}</span>
+                                            <span className="font-bold shrink-0 text-right">{healthLabel(val as string)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+
+                                    {/* ── API Rotation History (preserved) ── */}
+                                    {rotHistory.length > 0 && (
+                                      <div className="space-y-1">
+                                        <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>API Rotation History</p>
+                                        <div className="overflow-x-auto border rounded-xl max-h-[110px] overflow-y-auto" style={{ borderColor: 'var(--th-border2)' }}>
+                                          <table className="w-full text-left border-collapse text-[9px]">
+                                            <thead>
+                                              <tr className="bg-slate-50 dark:bg-slate-900 border-b font-bold sticky top-0" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text4)' }}>
+                                                <th className="p-1 bg-slate-50 dark:bg-slate-900">Time</th>
+                                                <th className="p-1 bg-slate-50 dark:bg-slate-900">Key</th>
+                                                <th className="p-1 bg-slate-50 dark:bg-slate-900">Reason</th>
+                                                <th className="p-1 bg-slate-50 dark:bg-slate-900">Page</th>
+                                                <th className="p-1 bg-slate-50 dark:bg-slate-900 text-center">Retries</th>
                                               </tr>
-                                            ))
-                                          )}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
+                                            </thead>
+                                            <tbody>
+                                              {rotHistory.map((event, idx) => (
+                                                <tr key={idx} className="border-b" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text3)' }}>
+                                                  <td className="p-1 font-mono whitespace-nowrap">{event.time}</td>
+                                                  <td className="p-1 font-semibold whitespace-nowrap">{event.keyNumber}</td>
+                                                  <td className="p-1 text-red-500 font-semibold">{event.reason}</td>
+                                                  <td className="p-1 font-mono whitespace-nowrap">{event.page}</td>
+                                                  <td className="p-1 font-mono text-center">{event.retries}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    )}
 
-                                </div>
-                              )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
                         </div>
