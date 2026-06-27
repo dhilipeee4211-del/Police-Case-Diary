@@ -31,8 +31,8 @@ class GeminiClientService {
     let retryCount = 0;
 
     while (true) {
-      const activeKey = ApiKeyManager.getActiveKey();
-      const keyIndexStr = activeKey ? `Key index ${ApiKeyManager.getActiveKeyIndex() + 1}` : 'Server default keys';
+      const activeIndex = ApiKeyManager.getActiveKeyIndex();
+      const keyIndexStr = `Key #${activeIndex + 1}`;
 
       Logger.log(`Sending extraction request to ${apiEndpoint} using ${keyIndexStr}...`, 'AI');
 
@@ -43,10 +43,8 @@ class GeminiClientService {
       try {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
+          'x-active-key-index': activeIndex.toString()
         };
-        if (activeKey) {
-          headers['x-gemini-key'] = activeKey;
-        }
 
         ApiKeyManager.incrementRequests();
 
@@ -74,6 +72,10 @@ class GeminiClientService {
           }
 
           if (result && result.success && result.data) {
+            // Update active index based on what successfully handled the request on the server
+            if (typeof result.activeKeyIndex === 'number' && result.activeKeyIndex !== -1) {
+              ApiKeyManager.rotateKey(result.activeKeyIndex);
+            }
             // Process and validate diaries list
             const rawJson = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
             const parsedDiaries = ValidationService.parseAndValidateDiaries(rawJson);
@@ -88,31 +90,44 @@ class GeminiClientService {
         const status = response.status;
         const errText = await response.text();
         let errMsg = '';
+        let isAllExhausted = false;
+
         try {
           const parsedErr = JSON.parse(errText);
           errMsg = parsedErr.error || parsedErr.message || errText;
+          isAllExhausted = !!parsedErr.allExhausted;
         } catch {
           errMsg = errText || `HTTP Status ${status}`;
         }
 
         const isQuotaError =
           status === 429 ||
+          isAllExhausted ||
           errMsg.toLowerCase().includes('quota exceeded') ||
           errMsg.toLowerCase().includes('resource_exhausted') ||
           errMsg.toLowerCase().includes('rate limit');
 
         if (isQuotaError) {
-          Logger.log(`Quota exceeded (429) detected for ${keyIndexStr}.`, 'WARNING');
-          if (activeKey) {
-            ApiKeyManager.markExhausted(activeKey, errMsg);
-            const nextKey = ApiKeyManager.rotateKey();
-            if (nextKey) {
-              onProgress('Quota exceeded. Rotating Gemini API key...');
-              continue; // Immediately retry with the rotated key
+          Logger.log(`Quota exceeded (429) detected for Key #${activeIndex + 1}.`, 'WARNING');
+          ApiKeyManager.markExhausted(activeIndex, errMsg);
+
+          if (isAllExhausted) {
+            const total = ApiKeyManager.getTotalKeysCount();
+            for (let idx = 0; idx < total; idx++) {
+              ApiKeyManager.markExhausted(idx, errMsg);
             }
+            throw new QuotaExhaustedError(`All Gemini API keys have reached their quota.`);
           }
-          // If we have no more keys to rotate to
-          throw new QuotaExhaustedError(`All configured API keys have been exhausted. Queue paused.`);
+
+          const oldIndex = activeIndex;
+          ApiKeyManager.rotateKey(); // Increments key index locally
+          const newIndex = ApiKeyManager.getActiveKeyIndex();
+
+          if (newIndex !== oldIndex && !ApiKeyManager.isAllExhausted()) {
+            onProgress('Quota exceeded. Rotating Gemini API key...');
+            continue; // Immediately retry with the next key index
+          }
+          throw new QuotaExhaustedError(`All Gemini API keys have reached their quota.`);
         }
 
         // Non-quota error, check retry capability

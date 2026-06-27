@@ -58,6 +58,36 @@ function parseRobustJson(str: string) {
   }
 }
 
+const getVercelKeys = (): string[] => {
+  return [
+    process.env.GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY_1,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+    process.env.GEMINI_API_KEY_4,
+    process.env.GEMINI_API_KEY_5,
+    process.env.GEMINI_API_KEY_6,
+    process.env.GEMINI_API_KEY_7,
+    process.env.GEMINI_API_KEY_8,
+    process.env.GEMINI_API_KEY_9,
+    process.env.GEMINI_API_KEY_10
+  ].filter(Boolean) as string[];
+};
+
+// API: Get secure Gemini API engine status (number of keys, rotation active status)
+app.get('/api/engine/status', (req, res) => {
+  try {
+    const keys = getVercelKeys();
+    return res.json({
+      success: true,
+      totalKeys: keys.length,
+      rotationActive: keys.length > 1
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Error getting engine status' });
+  }
+});
+
 // API: Parse / Extract PDF details using Gemini 2.5 Flash
 app.post('/api/extract', upload.single('file'), async (req, res) => {
   try {
@@ -78,14 +108,10 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Only PDF files are supported' });
     }
 
-    const clientKey = req.headers['x-gemini-key'] as string;
-    const apiKeys = [
-      clientKey,
-      process.env.GEMINI_API_KEY,
-      process.env.GEMINI_API_KEY_2,
-      process.env.GEMINI_API_KEY_3,
-      process.env.GEMINI_API_KEY_4
-    ].filter(Boolean) as string[];
+    const activeKeyHeader = req.headers['x-active-key-index'];
+    const activeKeyIndex = activeKeyHeader ? parseInt(activeKeyHeader as string, 10) : 0;
+
+    const apiKeys = getVercelKeys();
 
     if (apiKeys.length === 0) {
       return res.status(500).json({
@@ -161,12 +187,12 @@ Ensure that you:
         // Only retry on transient server overloads (503/UNAVAILABLE) and not on hard quota limits
         const isRetryable =
           (error.status === 503 ||
-          error.status === 'UNAVAILABLE' ||
-          error.code === 503 ||
-          errStr.includes('503') ||
-          errStr.includes('UNAVAILABLE') ||
-          errStr.includes('overloaded') ||
-          errStr.includes('high demand')) &&
+            error.status === 'UNAVAILABLE' ||
+            error.code === 503 ||
+            errStr.includes('503') ||
+            errStr.includes('UNAVAILABLE') ||
+            errStr.includes('overloaded') ||
+            errStr.includes('high demand')) &&
           !isQuotaExceeded;
 
         if (retries > 0 && isRetryable) {
@@ -178,10 +204,15 @@ Ensure that you:
       }
     };
 
-    keyLoop: for (let k = 0; k < apiKeys.length; k++) {
+    const startIndex = isNaN(activeKeyIndex) ? 0 : activeKeyIndex % apiKeys.length;
+    let successfulKeyIndex = -1;
+    let quotaErrorDetails = '';
+
+    keyLoop: for (let i = 0; i < apiKeys.length; i++) {
+      const k = (startIndex + i) % apiKeys.length;
       const apiKey = apiKeys[k];
-      console.log(`Attempting document extraction using API Key index ${k + 1}/${apiKeys.length}`);
-      
+      console.log(`Attempting document extraction using API Key index ${k + 1}/${apiKeys.length} (startIndex=${startIndex})`);
+
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
@@ -194,7 +225,7 @@ Ensure that you:
       for (const modelName of modelsToTry) {
         try {
           console.log(`Attempting document extraction with model: ${modelName} using API Key index ${k + 1}`);
-          
+
           const response = await retryWithBackoff(() =>
             ai.models.generateContent({
               model: modelName,
@@ -220,6 +251,7 @@ Ensure that you:
 
           // Try parsing the response directly
           extractedData = parseRobustJson(responseText);
+          successfulKeyIndex = k;
           console.log(`Successfully extracted document contents using model: ${modelName} and API Key index ${k + 1}`);
           break keyLoop; // Exit both loops on success
         } catch (err: any) {
@@ -235,9 +267,10 @@ Ensure that you:
             errStr.includes('RESOURCE_EXHAUSTED') ||
             err.status === 429 ||
             err.code === 429;
-          
+
           if (isQuotaExceeded) {
             console.warn(`Quota exceeded for API Key index ${k + 1}. Transitioning to next API Key...`);
+            quotaErrorDetails = errStr;
             continue keyLoop;
           }
         }
@@ -245,16 +278,25 @@ Ensure that you:
     }
 
     if (!extractedData) {
+      if (quotaErrorDetails) {
+        return res.status(429).json({
+          error: 'All Gemini API keys have reached their quota.',
+          allExhausted: true,
+          totalKeys: apiKeys.length,
+          message: quotaErrorDetails
+        });
+      }
+
       console.warn('All Gemini models were unavailable or overloaded. Utilizing intelligent rule-based filename fallback parser to maintain service continuity.');
-      
+
       // Clean filename: remove extension, replace underscores/hyphens with spaces
       const nameClean = fileName.replace(/\.[^/.]+$/, "").replace(/[_\-]/g, " ").trim();
-      
+
       let policeStation = "VIKKIRAMANGALAM";
       let district = "ARIYALUR";
       let crNo = "0288/2018";
       let secOfLaw = "U/s 143, 341 IPC";
-      
+
       // Try to find Crime/Cr number
       const crMatch = fileName.match(/(?:cr|crime|c\.r|fir)(?:\s*(?:no|num)?)?[\s\._\-:]*(\d+)[\s\._\-:\/]*(\d{4}|\d{2})/i);
       if (crMatch) {
@@ -329,15 +371,23 @@ Ensure that you:
         }
       ];
 
-      return res.json({ 
-        success: true, 
-        data: extractedData, 
+      return res.json({
+        success: true,
+        data: extractedData,
         fallbackUsed: true,
-        message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.' 
+        activeKeyIndex: -1,
+        totalKeys: apiKeys.length,
+        message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.'
       });
     }
 
-    return res.json({ success: true, data: extractedData, fallbackUsed: false });
+    return res.json({ 
+      success: true, 
+      data: extractedData, 
+      fallbackUsed: false,
+      activeKeyIndex: successfulKeyIndex,
+      totalKeys: apiKeys.length
+    });
   } catch (error: any) {
     console.error('Extraction error:', error);
     return res.status(500).json({
@@ -354,14 +404,10 @@ app.post('/api/extract-text', async (req, res) => {
       return res.status(400).json({ error: 'No raw text provided for reconstruction.' });
     }
 
-    const clientKey = req.headers['x-gemini-key'] as string;
-    const apiKeys = [
-      clientKey,
-      process.env.GEMINI_API_KEY,
-      process.env.GEMINI_API_KEY_2,
-      process.env.GEMINI_API_KEY_3,
-      process.env.GEMINI_API_KEY_4
-    ].filter(Boolean) as string[];
+    const activeKeyHeader = req.headers['x-active-key-index'];
+    const activeKeyIndex = activeKeyHeader ? parseInt(activeKeyHeader as string, 10) : 0;
+
+    const apiKeys = getVercelKeys();
 
     if (apiKeys.length === 0) {
       return res.status(500).json({
@@ -440,12 +486,12 @@ Ensure that you:
 
         const isRetryable =
           (error.status === 503 ||
-          error.status === 'UNAVAILABLE' ||
-          error.code === 503 ||
-          errStr.includes('503') ||
-          errStr.includes('UNAVAILABLE') ||
-          errStr.includes('overloaded') ||
-          errStr.includes('high demand')) &&
+            error.status === 'UNAVAILABLE' ||
+            error.code === 503 ||
+            errStr.includes('503') ||
+            errStr.includes('UNAVAILABLE') ||
+            errStr.includes('overloaded') ||
+            errStr.includes('high demand')) &&
           !isQuotaExceeded;
 
         if (retries > 0 && isRetryable) {
@@ -457,10 +503,15 @@ Ensure that you:
       }
     };
 
-    keyLoop: for (let k = 0; k < apiKeys.length; k++) {
+    const startIndex = isNaN(activeKeyIndex) ? 0 : activeKeyIndex % apiKeys.length;
+    let successfulKeyIndex = -1;
+    let quotaErrorDetails = '';
+
+    keyLoop: for (let i = 0; i < apiKeys.length; i++) {
+      const k = (startIndex + i) % apiKeys.length;
       const apiKey = apiKeys[k];
-      console.log(`Attempting text parsing using API Key index ${k + 1}/${apiKeys.length}`);
-      
+      console.log(`Attempting text parsing using API Key index ${k + 1}/${apiKeys.length} (startIndex=${startIndex})`);
+
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
@@ -473,7 +524,7 @@ Ensure that you:
       for (const modelName of modelsToTry) {
         try {
           console.log(`Attempting raw text parsing with model: ${modelName} using API Key index ${k + 1}`);
-          
+
           const response = await retryWithBackoff(() =>
             ai.models.generateContent({
               model: modelName,
@@ -490,6 +541,7 @@ Ensure that you:
           }
 
           extractedData = parseRobustJson(responseText);
+          successfulKeyIndex = k;
           console.log(`Successfully structured document from text using model: ${modelName} and API Key index ${k + 1}`);
           break keyLoop;
         } catch (err: any) {
@@ -504,9 +556,10 @@ Ensure that you:
             errStr.includes('RESOURCE_EXHAUSTED') ||
             err.status === 429 ||
             err.code === 429;
-          
+
           if (isQuotaExceeded) {
             console.warn(`Quota exceeded for text parsing API Key index ${k + 1}. Transitioning to next API Key...`);
+            quotaErrorDetails = errStr;
             continue keyLoop;
           }
         }
@@ -514,6 +567,15 @@ Ensure that you:
     }
 
     if (!extractedData) {
+      if (quotaErrorDetails) {
+        return res.status(429).json({
+          error: 'All Gemini API keys have reached their quota.',
+          allExhausted: true,
+          totalKeys: apiKeys.length,
+          message: quotaErrorDetails
+        });
+      }
+
       // Fallback
       const nameClean = (filename || 'uploaded.pdf').replace(/\.[^/.]+$/, "").replace(/[_\-]/g, " ").trim();
       let policeStation = "VIKKIRAMANGALAM";
@@ -565,11 +627,19 @@ Ensure that you:
         success: true,
         data: extractedData,
         fallbackUsed: true,
+        activeKeyIndex: -1,
+        totalKeys: apiKeys.length,
         message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.'
       });
     }
 
-    return res.json({ success: true, data: extractedData, fallbackUsed: false });
+    return res.json({ 
+      success: true, 
+      data: extractedData, 
+      fallbackUsed: false,
+      activeKeyIndex: successfulKeyIndex,
+      totalKeys: apiKeys.length
+    });
   } catch (error: any) {
     console.error('Extract text API error:', error);
     return res.status(500).json({ error: 'Failed to structure raw text: ' + (error.message || '') });
@@ -578,7 +648,7 @@ Ensure that you:
 
 // --- Server-Side Lightweight Fast Database Sync API ---
 
-const DATA_DIR = process.env.VERCEL 
+const DATA_DIR = process.env.VERCEL
   ? path.join(os.tmpdir(), 'police-case-diary-data')
   : path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'databases.json');
@@ -820,7 +890,7 @@ CREATE POLICY "Allow delete for all" ON database_access FOR DELETE USING (true);
           2500,
           'Supabase ping timed out'
         );
-        
+
         if (!error) {
           connectionTest = true;
           tableExists = true;
@@ -872,11 +942,11 @@ app.get('/api/db/list', async (req, res) => {
 
     if (!supabaseServerClient) {
       localDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      return res.json({ 
-        success: true, 
-        databases: localDbs, 
+      return res.json({
+        success: true,
+        databases: localDbs,
         source: 'disk',
-        error: null 
+        error: null
       });
     }
 
@@ -928,13 +998,13 @@ app.get('/api/db/list', async (req, res) => {
           createdAt: Number(item.created_at),
           diaries: typeof item.diaries === 'string' ? JSON.parse(item.diaries) : item.diaries,
         }));
-        
+
         const mergedMap = new Map();
         localDbs.forEach(db => mergedMap.set(db.id, db));
         mappedDbs.forEach(db => mergedMap.set(db.id, db));
-        
+
         const finalDbs = Array.from(mergedMap.values());
-        
+
         // Update local cache for this specific set
         const allLocalRest = readServerDatabases().filter((db: any) => {
           if (isAdmin) return false;
@@ -944,7 +1014,7 @@ app.get('/api/db/list', async (req, res) => {
 
         finalDbs.sort((a: any, b: any) => b.createdAt - a.createdAt);
         console.log(`Loaded ${finalDbs.length} databases (merged Supabase and local cache) for user ${userId} (${userEmail})`);
-        
+
         return res.json({ success: true, databases: finalDbs, source: 'supabase_merged' });
       }
 
@@ -1053,22 +1123,22 @@ app.get('/api/db/access', async (req, res) => {
 // Endpoint: POST database access update (Admin only)
 app.post('/api/db/access', async (req, res) => {
   const { requesterEmail, targetEmail, dbId, action } = req.body;
-  
+
   if (!requesterEmail || requesterEmail !== 'dhilipeee4211@gmail.com') {
     return res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
   }
-  
+
   if (!targetEmail || !dbId || !action) {
     return res.status(400).json({ error: 'Missing parameters. Need targetEmail, dbId, and action.' });
   }
-  
+
   const accessMap = await readAccessMap();
   const lowerTargetEmail = targetEmail.toLowerCase().trim();
-  
+
   if (!accessMap[lowerTargetEmail]) {
     accessMap[lowerTargetEmail] = [];
   }
-  
+
   if (action === 'grant') {
     if (!accessMap[lowerTargetEmail].includes(dbId)) {
       accessMap[lowerTargetEmail].push(dbId);
@@ -1078,7 +1148,7 @@ app.post('/api/db/access', async (req, res) => {
   } else {
     return res.status(400).json({ error: 'Invalid action. Use "grant" or "revoke".' });
   }
-  
+
   await writeAccessMap(accessMap);
   return res.json({ success: true, accessMap });
 });
@@ -1119,22 +1189,22 @@ app.post('/api/db/save', async (req, res) => {
 
       if (error) {
         console.log('Supabase save error (saved to disk only):', error);
-        return res.json({ 
-          success: true, 
-          database: newDb, 
+        return res.json({
+          success: true,
+          database: newDb,
           supabaseSynced: false,
-          error: error.message 
+          error: error.message
         });
       }
       console.log(`Successfully saved/synced database ${newDb.id} to Supabase.`);
       return res.json({ success: true, database: newDb, supabaseSynced: true });
     } catch (supaErr: any) {
       console.log('Supabase save exception (saved to disk only):', supaErr);
-      return res.json({ 
-        success: true, 
-        database: newDb, 
-        supabaseSynced: false, 
-        error: supaErr.message || String(supaErr) 
+      return res.json({
+        success: true,
+        database: newDb,
+        supabaseSynced: false,
+        error: supaErr.message || String(supaErr)
       });
     }
   } catch (err: any) {

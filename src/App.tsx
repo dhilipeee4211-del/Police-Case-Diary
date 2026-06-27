@@ -506,16 +506,27 @@ export default function App() {
   const [recoveryQueue, setRecoveryQueue] = useState<any | null>(null);
 
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
-  const [apiKeysInput, setApiKeysInput] = useState<string>('');
   const [concurrencyLimit, setConcurrencyLimit] = useState<number>(1);
   const [chunkSize, setChunkSize] = useState<number>(1);
 
-  const configuredKeysCount = apiKeysInput.split('\n').map(k => k.trim()).filter(Boolean).length;
-  const activeKeyIdxToShow = ApiKeyManager.getActiveKeyIndex();
-  const activeKeyStatus = ApiKeyManager.getKeyStatuses()[activeKeyIdxToShow];
-  const keyStatusMsg = activeKeyStatus && activeKeyStatus.status === 'exhausted' 
-    ? `Key #${activeKeyIdxToShow + 1} Exhausted: ${activeKeyStatus.errorMessage || 'Quota Exceeded'}` 
-    : '';
+  const totalKeys = ApiKeyManager.getTotalKeysCount();
+  const activeIndex = ApiKeyManager.getActiveKeyIndex();
+  const isAllExhausted = ApiKeyManager.isAllExhausted();
+  const activeStatus = ApiKeyManager.getKeyStatuses()[activeIndex];
+  const isKeyExhausted = activeStatus?.status === 'exhausted';
+  const processedRequests = ApiKeyManager.getProcessedRequestsCount();
+  const lastSwitchTime = ApiKeyManager.getLastSwitchTime();
+
+  const formatLastSwitch = (time: number) => {
+    if (time === 0) return 'Never';
+    const diffSec = Math.floor((Date.now() - time) / 1000);
+    if (diffSec < 6) return 'Just now';
+    if (diffSec < 60) return `${diffSec} seconds ago`;
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`;
+    const diffHour = Math.floor(diffMin / 60);
+    return `${diffHour} hour${diffHour === 1 ? '' : 's'} ago`;
+  };
 
 
   const [importConflictData, setImportConflictData] = useState<{
@@ -525,18 +536,10 @@ export default function App() {
   } | null>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load API Keys on mount
+  // Load API Keys count from backend on mount
   useEffect(() => {
-    const savedKeys = ApiKeyManager.getKeys();
-    setApiKeysInput(savedKeys.join('\n'));
+    ApiKeyManager.initialize();
   }, []);
-
-  const handleApiKeysInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setApiKeysInput(value);
-    const keysList = value.split('\n');
-    ApiKeyManager.setKeys(keysList);
-  };
 
   // Initialize RecoveryManager and sync queue state once user is logged in
   useEffect(() => {
@@ -2301,22 +2304,6 @@ export default function App() {
                               className="mt-3 space-y-3 pt-3 border-t flex flex-col"
                               style={{ borderColor: 'var(--th-border2)' }}
                             >
-                              {/* API Keys Configuration */}
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-[9px] font-bold uppercase tracking-wider flex justify-between" style={{ color: 'var(--th-text4)' }}>
-                                  <span>Gemini API Keys (One per line)</span>
-                                  <span className="text-[8px] font-mono text-indigo-500">Local Cache Rotation</span>
-                                </label>
-                                <textarea
-                                  placeholder="Paste API keys here (e.g. AIzaSy...)"
-                                  value={apiKeysInput}
-                                  onChange={handleApiKeysInputChange}
-                                  rows={3}
-                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-[10.5px] font-mono shadow-sm"
-                                  style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
-                                />
-                              </div>
-
                               {/* Concurrency and Chunk Size */}
                               <div className="grid grid-cols-2 gap-3">
                                 <div className="flex flex-col gap-1">
@@ -2352,23 +2339,70 @@ export default function App() {
                               </div>
 
                               {/* Telemetry/API Key statuses */}
-                              {configuredKeysCount > 0 && (
-                                <div className="p-2.5 rounded-xl text-[10px] space-y-1.5 font-medium border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
-                                  <div className="flex justify-between items-center text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
+                              {totalKeys > 0 && (
+                                <div className="p-2.5 rounded-xl text-[10.5px] space-y-2.5 font-medium border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                  {/* Engine Status Line */}
+                                  <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
                                     <span>Engine Status</span>
-                                    <span className="text-[8px] px-1 bg-green-500 text-white rounded">ROTATION ACTIVE</span>
+                                    {isAllExhausted ? (
+                                      <span className="text-[9px] font-bold text-red-600 flex items-center gap-1">🔴 Paused</span>
+                                    ) : isKeyExhausted ? (
+                                      <span className="text-[9px] font-bold text-amber-600 flex items-center gap-1">🟡 Waiting for Next Key</span>
+                                    ) : (
+                                      <span className="text-[9px] font-bold text-green-600 flex items-center gap-1">🟢 Rotation Active</span>
+                                    )}
                                   </div>
-                                  <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                    <span>Configured Keys:</span>
-                                    <span className="font-mono font-bold">{configuredKeysCount}</span>
-                                  </div>
-                                  <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                    <span>Active Key Index:</span>
-                                    <span className="font-mono font-bold">#{activeKeyIdxToShow + 1}</span>
-                                  </div>
-                                  {keyStatusMsg && (
-                                    <div className="text-[9px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded font-mono break-all mt-1">
-                                      {keyStatusMsg}
+
+                                  {isAllExhausted ? (
+                                    <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--th-border2)' }}>
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Reason</span>
+                                        <span className="font-semibold text-red-600">All Gemini API keys have reached their quota.</span>
+                                      </div>
+                                      <p className="text-[9.5px] leading-normal font-normal text-gray-500 mt-1">
+                                        Resume automatically after quota reset or when new API keys become available.
+                                      </p>
+                                    </div>
+                                  ) : isKeyExhausted ? (
+                                    <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--th-border2)' }}>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Current API Key:</span>
+                                        <span className="font-bold">Key #{activeIndex + 1} of {totalKeys}</span>
+                                      </div>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Status:</span>
+                                        <span className="font-bold text-amber-600">Quota Exceeded</span>
+                                      </div>
+                                      <div className="text-[9.5px] font-semibold text-amber-600 italic animate-pulse mt-1">
+                                        Automatically Switching...
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--th-border2)' }}>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Current API Key:</span>
+                                        <span className="font-bold">Key #{activeIndex + 1} of {totalKeys}</span>
+                                      </div>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Current Status:</span>
+                                        <span className="font-bold text-green-600">Healthy</span>
+                                      </div>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Rotation:</span>
+                                        <span className="font-bold">Automatic</span>
+                                      </div>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Last Switch:</span>
+                                        <span className="font-mono font-bold">{formatLastSwitch(lastSwitchTime)}</span>
+                                      </div>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Processed Requests:</span>
+                                        <span className="font-mono font-bold">{processedRequests}</span>
+                                      </div>
+                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                        <span>Quota Status:</span>
+                                        <span className="font-bold text-green-600">Available</span>
+                                      </div>
                                     </div>
                                   )}
                                 </div>
