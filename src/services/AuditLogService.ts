@@ -11,6 +11,10 @@ export interface AuditRecord {
   originalRecordId: string;
   ipAddress: string;
   browser: string;
+  policeStation?: string;
+  crimeNumber?: string;
+  preservedCdDate?: string;
+  deletedCount?: number;
 }
 
 const AUDIT_DB_ID = '__health_audit_logs__';
@@ -27,6 +31,9 @@ class AuditLogServiceClass {
       originalRecordId: string;
       ipAddress?: string;
       browser?: string;
+      policeStation?: string;
+      crimeNumber?: string;
+      preservedCdDate?: string;
     }
   ): Promise<void> {
     const supabase = getSupabaseClient();
@@ -95,7 +102,11 @@ class AuditLogServiceClass {
         noOfAccusedAbsent: '0',
         remarks: JSON.stringify({
           deletedRecordIds: newAudit.deletedRecordIds,
-          originalRecordId: newAudit.originalRecordId
+          originalRecordId: newAudit.originalRecordId,
+          policeStation: details.policeStation || '',
+          crimeNumber: details.crimeNumber || '',
+          preservedCdDate: details.preservedCdDate || '',
+          deletedCount: newAudit.deletedRecordIds.length
         }),
         postedFor: '',
         nextHearingDate: '',
@@ -148,10 +159,18 @@ class AuditLogServiceClass {
       return data.diaries.map((diary: CaseDiary) => {
         let deletedRecordIds: string[] = [];
         let originalRecordId = '';
+        let policeStation = '';
+        let crimeNumber = '';
+        let preservedCdDate = '';
+        let deletedCount = 0;
         try {
           const detail = JSON.parse(diary.remarks || '{}');
           deletedRecordIds = detail.deletedRecordIds || [];
           originalRecordId = detail.originalRecordId || '';
+          policeStation = detail.policeStation || '';
+          crimeNumber = detail.crimeNumber || '';
+          preservedCdDate = detail.preservedCdDate || '';
+          deletedCount = detail.deletedCount || deletedRecordIds.length;
         } catch (_) {}
 
         return {
@@ -162,7 +181,11 @@ class AuditLogServiceClass {
           deletedRecordIds,
           originalRecordId,
           browser: diary.dateOfCd || '',
-          ipAddress: diary.dateOfReportTime || ''
+          ipAddress: diary.dateOfReportTime || '',
+          policeStation,
+          crimeNumber,
+          preservedCdDate,
+          deletedCount
         };
       });
     } catch (err) {

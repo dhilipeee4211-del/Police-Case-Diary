@@ -21,12 +21,14 @@ class GeminiClientService {
     mode: 'free' | 'direct',
     data: string,
     filename: string,
-    onProgress: (step: string) => void
+    onProgress: (step: string) => void,
+    currentPage?: string,
+    currentBatch?: string
   ): Promise<CaseDiary[]> {
     const apiEndpoint = mode === 'free' ? '/api/extract-text' : '/api/extract';
     const requestBody = mode === 'free' 
-      ? { text: data, filename }
-      : { file: data, filename };
+      ? { text: data, filename, currentPage, currentBatch }
+      : { file: data, filename, currentPage, currentBatch };
 
     let retryCount = 0;
 
@@ -35,6 +37,7 @@ class GeminiClientService {
       const keyIndexStr = `Key #${activeIndex + 1}`;
 
       Logger.log(`Sending extraction request to ${apiEndpoint} using ${keyIndexStr}...`, 'AI');
+      ApiKeyManager.updateProcessing(activeIndex, currentPage || 'N/A');
 
       // Set up timeout controller
       const controller = new AbortController();
@@ -43,7 +46,9 @@ class GeminiClientService {
       try {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
-          'x-active-key-index': activeIndex.toString()
+          'x-active-key-index': activeIndex.toString(),
+          'x-current-page': currentPage || 'N/A',
+          'x-current-batch': currentBatch || 'N/A'
         };
 
         ApiKeyManager.incrementRequests();
@@ -65,16 +70,30 @@ class GeminiClientService {
 
           const result = await response.json();
 
+          // Sync backend rotation history events
+          if (result && Array.isArray(result.rotationEvents)) {
+            result.rotationEvents.forEach((ev: any) => {
+              ApiKeyManager.addHistoryEvent(ev);
+              const match = ev.keyNumber.match(/Key #(\d+)/);
+              if (match) {
+                const idx = parseInt(match[1], 10) - 1;
+                ApiKeyManager.markExhausted(idx, ev.newStatus);
+              }
+            });
+          }
+
           // Server fallback used due to internal quota exhaustion
           if (result && result.fallbackUsed) {
             const errorMsg = result.message || 'Gemini API keys exhausted on server side fallback';
+            ApiKeyManager.incrementFailure();
             throw new QuotaExhaustedError(errorMsg);
           }
 
           if (result && result.success && result.data) {
+            ApiKeyManager.incrementSuccess();
             // Update active index based on what successfully handled the request on the server
             if (typeof result.activeKeyIndex === 'number' && result.activeKeyIndex !== -1) {
-              ApiKeyManager.rotateKey(result.activeKeyIndex);
+              ApiKeyManager.rotateKey(result.activeKeyIndex, 'Backend Switch Success');
             }
             // Process and validate diaries list
             const rawJson = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
@@ -82,22 +101,39 @@ class GeminiClientService {
             Logger.log(`Successfully extracted and validated ${parsedDiaries.length} records.`, 'SUCCESS');
             return parsedDiaries;
           } else {
+            ApiKeyManager.incrementFailure();
             throw new Error(result.error || 'Server extraction endpoint returned success: false');
           }
         }
+
+        ApiKeyManager.incrementFailure();
 
         // Handle error responses (status codes >= 400)
         const status = response.status;
         const errText = await response.text();
         let errMsg = '';
         let isAllExhausted = false;
+        let backendRotationEvents: any[] = [];
 
         try {
           const parsedErr = JSON.parse(errText);
           errMsg = parsedErr.error || parsedErr.message || errText;
           isAllExhausted = !!parsedErr.allExhausted;
+          backendRotationEvents = parsedErr.rotationEvents || [];
         } catch {
           errMsg = errText || `HTTP Status ${status}`;
+        }
+
+        // Sync backend events on error
+        if (Array.isArray(backendRotationEvents)) {
+          backendRotationEvents.forEach((ev: any) => {
+            ApiKeyManager.addHistoryEvent(ev);
+            const match = ev.keyNumber.match(/Key #(\d+)/);
+            if (match) {
+              const idx = parseInt(match[1], 10) - 1;
+              ApiKeyManager.markExhausted(idx, ev.newStatus);
+            }
+          });
         }
 
         const isQuotaError =
@@ -120,7 +156,7 @@ class GeminiClientService {
           }
 
           const oldIndex = activeIndex;
-          ApiKeyManager.rotateKey(); // Increments key index locally
+          ApiKeyManager.rotateKey(undefined, 'Quota Exceeded');
           const newIndex = ApiKeyManager.getActiveKeyIndex();
 
           if (newIndex !== oldIndex && !ApiKeyManager.isAllExhausted()) {
@@ -149,6 +185,9 @@ class GeminiClientService {
         if (RetryManager.isRetryable(finalError) && retryCount < RetryManager.getMaxRetries()) {
           const delay = RetryManager.getDelay(retryCount);
           retryCount++;
+          
+          ApiKeyManager.updateRetryStatus(activeIndex, retryCount, RetryManager.getMaxRetries(), Math.round(delay / 1000));
+
           Logger.log(`Transient extraction failure: ${finalError.message || finalError}. Retrying in ${delay / 1000}s... (Attempt ${retryCount}/${RetryManager.getMaxRetries()})`, 'SYSTEM');
           onProgress(`Retrying request in ${delay / 1000}s... (Attempt ${retryCount}/${RetryManager.getMaxRetries()})`);
           await new Promise(resolve => setTimeout(resolve, delay));

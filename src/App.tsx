@@ -64,7 +64,7 @@ import { Logger } from './services/Logger';
 import { StorageManager } from './services/StorageManager';
 import { ApiKeyManager } from './services/ApiKeyManager';
 import { DataHealthService } from './services/DataHealthService';
-import { DuplicateGroup } from './services/DuplicateScanner';
+import { DuplicateGroup, parseCdDate } from './services/DuplicateScanner';
 import { QueueManager } from './services/QueueManager';
 import { RecoveryManager } from './services/RecoveryManager';
 import { ProgressManager } from './services/ProgressManager';
@@ -513,13 +513,26 @@ export default function App() {
 
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [concurrencyLimit, setConcurrencyLimit] = useState<number>(1);
-  const [chunkSize, setChunkSize] = useState<number>(1);
+  const [chunkSize, setChunkSize] = useState<number>(() => {
+    return StorageManager.getLocalItem<number>('gateway_pages_per_chunk', 2);
+  });
+  const [telemetryTick, setTelemetryTick] = useState<number>(0);
+
+  useEffect(() => {
+    return ApiKeyManager.subscribe(() => {
+      setTelemetryTick(prev => prev + 1);
+    });
+  }, []);
+
+  useEffect(() => {
+    StorageManager.setLocalItem('gateway_pages_per_chunk', chunkSize);
+  }, [chunkSize]);
 
   const totalKeys = ApiKeyManager.getTotalKeysCount();
   const activeIndex = ApiKeyManager.getActiveKeyIndex();
   const isAllExhausted = ApiKeyManager.isAllExhausted();
   const activeStatus = ApiKeyManager.getKeyStatuses()[activeIndex];
-  const isKeyExhausted = activeStatus?.status === 'exhausted';
+  const isKeyExhausted = activeStatus?.status === 'quota_exhausted' || activeStatus?.status === 'auth_failed';
   const processedRequests = ApiKeyManager.getProcessedRequestsCount();
   const lastSwitchTime = ApiKeyManager.getLastSwitchTime();
 
@@ -560,6 +573,8 @@ export default function App() {
     lastScanDate: string;
     removedCount: number;
     score: number;
+    latestPreservedDate: string;
+    cleanupStatus: string;
   }>({
     totalRecords: 0,
     uniqueRecords: 0,
@@ -568,7 +583,9 @@ export default function App() {
     scanTimeMs: 0,
     lastScanDate: '',
     removedCount: 0,
-    score: 100
+    score: 100,
+    latestPreservedDate: 'N/A',
+    cleanupStatus: 'Not Scanned'
   });
 
   const [backupsList, setBackupsList] = useState<any[]>([]);
@@ -650,12 +667,21 @@ export default function App() {
     const scanDuration = Date.now() - startTime;
 
     let totalDuplicates = 0;
+    let latestPreservedDate = 'N/A';
+    let latestPreservedTime = 0;
+
     results.forEach(g => {
       totalDuplicates += g.duplicates.length;
+      const d = parseCdDate(g.originalRecord.dateOfCd);
+      if (d && d.getTime() > latestPreservedTime) {
+        latestPreservedTime = d.getTime();
+        latestPreservedDate = g.originalRecord.dateOfCd;
+      }
     });
 
     const unique = totalCount - totalDuplicates;
     const healthScore = totalCount > 0 ? Math.floor((unique / totalCount) * 100) : 100;
+    const cleanupStatus = results.length === 0 ? 'Healthy (No Duplicates)' : 'Duplicates Found: Action Required';
 
     setDuplicateGroups(results);
     setHealthStats(prev => ({
@@ -666,7 +692,9 @@ export default function App() {
       totalDuplicatesCount: totalDuplicates,
       scanTimeMs: scanDuration,
       lastScanDate: new Date().toLocaleString('en-GB'),
-      score: healthScore
+      score: healthScore,
+      latestPreservedDate,
+      cleanupStatus
     }));
 
     setIsScanning(false);
@@ -674,7 +702,8 @@ export default function App() {
   };
 
   const handleRemoveGroupDuplicates = async (group: DuplicateGroup) => {
-    if (window.confirm(`Are you sure you want to delete ${group.duplicates.length} duplicate record(s) and preserve the oldest original record? This action will generate a safety restore backup. Continue?`)) {
+    const confirmMsg = `You are about to remove ${group.duplicates.length} duplicate record(s).\n\nThe newest Case Diary (latest CD Date) in each duplicate group will be preserved.\n\nAll older duplicate records will be permanently deleted.\n\nThis action cannot be undone.\n\nDo you want to continue?`;
+    if (window.confirm(confirmMsg)) {
       try {
         setIsScanning(true);
         await DataHealthService.removeGroupDuplicates(group, user?.email || 'admin@gmail.com', savedDatabases);
@@ -686,9 +715,33 @@ export default function App() {
         const updatedResults = DataHealthService.scanDatabase(dbs);
         setDuplicateGroups(updatedResults);
 
+        // Recompute stats
+        let totalDuplicates = 0;
+        let latestPreservedDate = 'N/A';
+        let latestPreservedTime = 0;
+        updatedResults.forEach(g => {
+          totalDuplicates += g.duplicates.length;
+          const d = parseCdDate(g.originalRecord.dateOfCd);
+          if (d && d.getTime() > latestPreservedTime) {
+            latestPreservedTime = d.getTime();
+            latestPreservedDate = g.originalRecord.dateOfCd;
+          }
+        });
+        const totalCount = dbs.filter(db => !db.id.startsWith('__')).reduce((acc, db) => acc + (db.diaries?.length || 0), 0);
+        const unique = totalCount - totalDuplicates;
+        const healthScore = totalCount > 0 ? Math.floor((unique / totalCount) * 100) : 100;
+        const cleanupStatus = updatedResults.length === 0 ? 'Healthy (No Duplicates)' : 'Duplicates Found: Action Required';
+
         setHealthStats(prev => ({
           ...prev,
-          removedCount: prev.removedCount + group.duplicates.length
+          totalRecords: totalCount,
+          uniqueRecords: unique,
+          duplicateGroupsCount: updatedResults.length,
+          totalDuplicatesCount: totalDuplicates,
+          removedCount: prev.removedCount + group.duplicates.length,
+          score: healthScore,
+          latestPreservedDate,
+          cleanupStatus
         }));
 
         await loadBackupsAndLogs();
@@ -712,7 +765,7 @@ export default function App() {
       totalDuplicates += g.duplicates.length;
     });
 
-    const confirmMsg = `You are about to remove ${totalDuplicates} duplicate records.\n\nThe oldest record in each duplicate group will be preserved.\n\nThis action cannot be undone.\n\nContinue?`;
+    const confirmMsg = `You are about to remove ${totalDuplicates} duplicate records.\n\nThe newest Case Diary (latest CD Date) in each duplicate group will be preserved.\n\nAll older duplicate records will be permanently deleted.\n\nThis action cannot be undone.\n\nDo you want to continue?`;
     if (window.confirm(confirmMsg)) {
       try {
         setIsScanning(true);
@@ -729,9 +782,33 @@ export default function App() {
         const updatedResults = DataHealthService.scanDatabase(dbs);
         setDuplicateGroups(updatedResults);
 
+        // Recompute stats
+        let newTotalDuplicates = 0;
+        let latestPreservedDate = 'N/A';
+        let latestPreservedTime = 0;
+        updatedResults.forEach(g => {
+          newTotalDuplicates += g.duplicates.length;
+          const d = parseCdDate(g.originalRecord.dateOfCd);
+          if (d && d.getTime() > latestPreservedTime) {
+            latestPreservedTime = d.getTime();
+            latestPreservedDate = g.originalRecord.dateOfCd;
+          }
+        });
+        const totalCount = dbs.filter(db => !db.id.startsWith('__')).reduce((acc, db) => acc + (db.diaries?.length || 0), 0);
+        const unique = totalCount - newTotalDuplicates;
+        const healthScore = totalCount > 0 ? Math.floor((unique / totalCount) * 100) : 100;
+        const cleanupStatus = updatedResults.length === 0 ? 'Healthy (No Duplicates)' : 'Duplicates Found: Action Required';
+
         setHealthStats(prev => ({
           ...prev,
-          removedCount: prev.removedCount + removed
+          totalRecords: totalCount,
+          uniqueRecords: unique,
+          duplicateGroupsCount: updatedResults.length,
+          totalDuplicatesCount: newTotalDuplicates,
+          removedCount: prev.removedCount + removed,
+          score: healthScore,
+          latestPreservedDate,
+          cleanupStatus
         }));
 
         await loadBackupsAndLogs();
@@ -2557,80 +2634,301 @@ export default function App() {
                                     className="w-full bg-white border border-gray-200 rounded-xl px-2.5 py-2 text-xs font-semibold"
                                     style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
                                   >
-                                    <option value={1}>1 page (Memory efficient)</option>
-                                    <option value={2}>2 pages (Standard)</option>
-                                    <option value={5}>5 pages (Speedy)</option>
+                                    <option value={1}>1 Page (Memory Efficient)</option>
+                                    <option value={2}>2 Pages (Standard)</option>
+                                    <option value={5}>5 Pages (good)</option>
+                                    <option value={10}>10 Pages (Fast)</option>
+                                    <option value={20}>20 Pages (Maximum)</option>
                                   </select>
                                 </div>
                               </div>
 
                               {/* Telemetry/API Key statuses */}
                               {totalKeys > 0 && (
-                                <div className="p-2.5 rounded-xl text-[10.5px] space-y-2.5 font-medium border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
-                                  {/* Engine Status Line */}
-                                  <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
-                                    <span>Engine Status</span>
-                                    {isAllExhausted ? (
-                                      <span className="text-[9px] font-bold text-red-600 flex items-center gap-1">🔴 Paused</span>
-                                    ) : isKeyExhausted ? (
-                                      <span className="text-[9px] font-bold text-amber-600 flex items-center gap-1">🟡 Waiting for Next Key</span>
-                                    ) : (
-                                      <span className="text-[9px] font-bold text-green-600 flex items-center gap-1">🟢 Rotation Active</span>
-                                    )}
+                                <div className="p-3 rounded-2xl text-[10.5px] space-y-3 font-medium border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                  
+                                  {/* Detailed Monitoring Dashboard */}
+                                  <div className="space-y-1.5 pb-2.5 border-b" style={{ borderColor: 'var(--th-border2)' }}>
+                                    <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
+                                      <span>Engine Status</span>
+                                      {isAllExhausted ? (
+                                        <span className="text-[9px] font-bold text-red-600 flex items-center gap-1">🔴 Paused</span>
+                                      ) : activeStatus?.status === 'retrying' ? (
+                                        <span className="text-[9px] font-bold text-orange-500 flex items-center gap-1 animate-pulse">🟠 Retrying</span>
+                                      ) : (
+                                        <span className="text-[9px] font-bold text-green-600 flex items-center gap-1">🟢 Rotation Active</span>
+                                      )}
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 pt-1.5 text-[9.5px]" style={{ color: 'var(--th-text3)' }}>
+                                      <div className="flex justify-between">
+                                        <span>Current Active Key:</span>
+                                        <span className="font-bold">Key #{activeIndex + 1} of {totalKeys}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Rotation Mode:</span>
+                                        <span className="font-bold text-green-600">Automatic</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Current Page:</span>
+                                        <span className="font-bold font-mono">
+                                          {QueueManager.getStatus().state === 'processing' 
+                                            ? QueueManager.getStatus().processedPages + 1 
+                                            : activeStatus?.processing || 'N/A'}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Current Batch:</span>
+                                        <span className="font-bold font-mono">
+                                          {QueueManager.getStatus().state === 'processing'
+                                            ? `${QueueManager.getStatus().currentChunkIndex + 1} / ${QueueManager.getStatus().totalChunks}`
+                                            : 'N/A'}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Pages Per Chunk:</span>
+                                        <span className="font-bold">{chunkSize}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Retry Count:</span>
+                                        <span className="font-bold">{activeStatus?.retries || 0}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Total Keys:</span>
+                                        <span className="font-bold">{totalKeys}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Healthy Keys:</span>
+                                        <span className="font-bold text-green-600">
+                                          {ApiKeyManager.getKeyStatuses().filter(k => k.status === 'healthy' || k.status === 'active').length}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Waiting Keys:</span>
+                                        <span className="font-bold text-amber-500">
+                                          {ApiKeyManager.getKeyStatuses().filter(k => k.status === 'waiting').length}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Exhausted Keys:</span>
+                                        <span className="font-bold text-red-500">
+                                          {ApiKeyManager.getKeyStatuses().filter(k => k.status === 'quota_exhausted' || k.status === 'auth_failed').length}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Successful Requests:</span>
+                                        <span className="font-bold text-green-600 font-mono">{ApiKeyManager.getSuccessfulRequestsCount()}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span>Failed Requests:</span>
+                                        <span className="font-bold text-red-500 font-mono">{ApiKeyManager.getFailedRequestsCount()}</span>
+                                      </div>
+                                      <div className="flex justify-between col-span-2">
+                                        <span>Last Key Switch:</span>
+                                        <span className="font-bold font-mono">{formatLastSwitch(lastSwitchTime)}</span>
+                                      </div>
+                                      <div className="flex justify-between col-span-2">
+                                        <span>Processing Speed:</span>
+                                        <span className="font-bold font-mono">
+                                          {QueueManager.getStatus().speed > 0 
+                                            ? `${(60 / QueueManager.getStatus().speed).toFixed(1)} sec/request` 
+                                            : '2.8 sec/request'}
+                                        </span>
+                                      </div>
+                                      <div className="flex justify-between col-span-2">
+                                        <span>Current Queue Status:</span>
+                                        <span className="font-bold">
+                                          {isExtracting ? 'Running' : isPaused ? 'Paused' : 'Idle'}
+                                        </span>
+                                      </div>
+                                    </div>
                                   </div>
 
-                                  {isAllExhausted ? (
-                                    <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--th-border2)' }}>
-                                      <div className="flex flex-col gap-0.5">
-                                        <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>Reason</span>
-                                        <span className="font-semibold text-red-600">All Gemini API keys have reached their quota.</span>
+                                  {/* Retry Monitoring Panel */}
+                                  {activeStatus?.status === 'retrying' && (
+                                    <div className="p-2 bg-orange-50/50 dark:bg-orange-950/10 border border-orange-250 dark:border-orange-900/30 rounded-xl space-y-1 text-[9.5px]">
+                                      <p className="font-bold text-orange-600 uppercase tracking-wider text-[8.5px]">Active Retry Monitor</p>
+                                      <div className="flex justify-between">
+                                        <span>Retry:</span>
+                                        <span className="font-bold">{activeStatus.currentRetry} / {activeStatus.maxRetry}</span>
                                       </div>
-                                      <p className="text-[9.5px] leading-normal font-normal text-gray-500 mt-1">
-                                        Resume automatically after quota reset or when new API keys become available.
-                                      </p>
+                                      <div className="flex justify-between">
+                                        <span>Next Retry:</span>
+                                        <span className="font-bold">{activeStatus.retryDelay} Seconds</span>
+                                      </div>
+                                      {activeStatus.lastRetryTime && (
+                                        <div className="flex justify-between">
+                                          <span>Last Retry Time:</span>
+                                          <span className="font-bold font-mono">{activeStatus.lastRetryTime}</span>
+                                        </div>
+                                      )}
                                     </div>
-                                  ) : isKeyExhausted ? (
-                                    <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--th-border2)' }}>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Current API Key:</span>
-                                        <span className="font-bold">Key #{activeIndex + 1} of {totalKeys}</span>
+                                  )}
+
+                                  {/* Final Failure Monitor Panel */}
+                                  {isAllExhausted && (
+                                    <div className="p-2.5 bg-red-50/50 dark:bg-red-950/10 border border-red-200 dark:border-red-900/30 rounded-xl space-y-1.5 text-[9.5px]">
+                                      <div className="flex justify-between items-center text-red-600 font-bold uppercase tracking-wider text-[8.5px]">
+                                        <span>Final Failure Summary</span>
+                                        <span>🔴 Paused</span>
                                       </div>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Status:</span>
-                                        <span className="font-bold text-amber-600">Quota Exceeded</span>
-                                      </div>
-                                      <div className="text-[9.5px] font-semibold text-amber-600 italic animate-pulse mt-1">
-                                        Automatically Switching...
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <div className="space-y-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--th-border2)' }}>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Current API Key:</span>
-                                        <span className="font-bold">Key #{activeIndex + 1} of {totalKeys}</span>
-                                      </div>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Current Status:</span>
-                                        <span className="font-bold text-green-600">Healthy</span>
-                                      </div>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Rotation:</span>
-                                        <span className="font-bold">Automatic</span>
-                                      </div>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Last Switch:</span>
-                                        <span className="font-mono font-bold">{formatLastSwitch(lastSwitchTime)}</span>
-                                      </div>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Processed Requests:</span>
-                                        <span className="font-mono font-bold">{processedRequests}</span>
-                                      </div>
-                                      <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
-                                        <span>Quota Status:</span>
-                                        <span className="font-bold text-green-600">Available</span>
+                                      <div className="border-t border-red-200 dark:border-red-900/30 pt-1 space-y-0.5">
+                                        <div className="flex justify-between text-red-650">
+                                          <span>Reason:</span>
+                                          <span className="font-semibold text-right">All Gemini API keys have reached their quota.</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Detected Keys:</span>
+                                          <span className="font-bold">{totalKeys}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Exhausted Keys:</span>
+                                          <span className="font-semibold text-red-500">
+                                            {ApiKeyManager.getKeyStatuses()
+                                              .filter(k => k.status === 'quota_exhausted' || k.status === 'auth_failed')
+                                              .map(k => k.key)
+                                              .join(', ') || 'None'}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Last Active Key:</span>
+                                          <span className="font-bold">Key #{activeIndex + 1}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Completed Pages:</span>
+                                          <span className="font-bold font-mono">{QueueManager.getStatus().processedPages}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Remaining Pages:</span>
+                                          <span className="font-bold font-mono">
+                                            {Math.max(0, QueueManager.getStatus().totalPages - QueueManager.getStatus().processedPages)}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Resume Available:</span>
+                                          <span className="font-bold text-green-600">YES</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Resume Position:</span>
+                                          <span className="font-bold font-mono text-green-600">Page {QueueManager.getStatus().processedPages + 1}</span>
+                                        </div>
                                       </div>
                                     </div>
                                   )}
+
+                                  {/* API Key Status Table */}
+                                  <div className="space-y-1">
+                                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500" style={{ color: 'var(--th-text4)' }}>API Key Status Table</p>
+                                    <div className="overflow-x-auto border rounded-xl" style={{ borderColor: 'var(--th-border2)' }}>
+                                      <table className="w-full text-left border-collapse text-[9px]">
+                                        <thead>
+                                          <tr className="bg-slate-50 dark:bg-slate-900 border-b font-bold" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text4)' }}>
+                                            <th className="p-1">Key</th>
+                                            <th className="p-1">Status</th>
+                                            <th className="p-1">Reason</th>
+                                            <th className="p-1 text-center">Reqs</th>
+                                            <th className="p-1 text-center">Retries</th>
+                                            <th className="p-1">Last Used</th>
+                                            <th className="p-1">Switch</th>
+                                            <th className="p-1">Page</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {ApiKeyManager.getKeyStatuses().map((status, idx) => {
+                                            let statusColor = 'text-gray-400';
+                                            let statusLabel = 'Unused';
+                                            switch (status.status) {
+                                              case 'active':
+                                                statusColor = 'text-green-600 font-bold';
+                                                statusLabel = '🟢 Active';
+                                                break;
+                                              case 'healthy':
+                                                statusColor = 'text-green-600';
+                                                statusLabel = '🟢 Healthy';
+                                                break;
+                                              case 'waiting':
+                                                statusColor = 'text-amber-500';
+                                                statusLabel = '🟡 Waiting';
+                                                break;
+                                              case 'initializing':
+                                                statusColor = 'text-blue-500';
+                                                statusLabel = '🔵 Init';
+                                                break;
+                                              case 'retrying':
+                                                statusColor = 'text-orange-500 animate-pulse';
+                                                statusLabel = '🟠 Retry';
+                                                break;
+                                              case 'quota_exhausted':
+                                                statusColor = 'text-red-650 font-bold';
+                                                statusLabel = '🔴 Exhausted';
+                                                break;
+                                              case 'auth_failed':
+                                                statusColor = 'text-red-750 font-bold';
+                                                statusLabel = '🔴 Auth Fail';
+                                                break;
+                                              case 'unused':
+                                              default:
+                                                statusColor = 'text-gray-450';
+                                                statusLabel = '⚪ Unused';
+                                                break;
+                                            }
+                                            return (
+                                              <tr key={idx} className="border-b" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text3)' }}>
+                                                <td className="p-1 font-semibold whitespace-nowrap">{status.key}</td>
+                                                <td className={`p-1 whitespace-nowrap ${statusColor}`}>{statusLabel}</td>
+                                                <td className="p-1 text-red-500 font-semibold">{status.reason || '-'}</td>
+                                                <td className="p-1 text-center font-mono">{status.requestsProcessed}</td>
+                                                <td className="p-1 text-center font-mono">{status.retries}</td>
+                                                <td className="p-1 whitespace-nowrap">{status.lastUsed > 0 ? new Date(status.lastUsed).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : '-'}</td>
+                                                <td className="p-1 whitespace-nowrap">{status.switchTime || '-'}</td>
+                                                <td className="p-1 font-mono">{status.processing || '-'}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+
+                                  {/* API Rotation History */}
+                                  <div className="space-y-1">
+                                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500" style={{ color: 'var(--th-text4)' }}>API Rotation History</p>
+                                    <div className="overflow-x-auto border rounded-xl max-h-[110px] overflow-y-auto" style={{ borderColor: 'var(--th-border2)' }}>
+                                      <table className="w-full text-left border-collapse text-[9px]">
+                                        <thead>
+                                          <tr className="bg-slate-50 dark:bg-slate-900 border-b font-bold sticky top-0" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text4)' }}>
+                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Time</th>
+                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Key</th>
+                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Prev Status</th>
+                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">New Status</th>
+                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Reason</th>
+                                            <th className="p-1 bg-slate-50 dark:bg-slate-900">Page</th>
+                                            <th className="p-1 bg-slate-50 dark:bg-slate-900 text-center">Retries</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {ApiKeyManager.getRotationHistory().length === 0 ? (
+                                            <tr>
+                                              <td colSpan={7} className="p-2 text-center text-gray-400 italic">No rotation events.</td>
+                                            </tr>
+                                          ) : (
+                                            ApiKeyManager.getRotationHistory().map((event, idx) => (
+                                              <tr key={idx} className="border-b" style={{ borderColor: 'var(--th-border2)', color: 'var(--th-text3)' }}>
+                                                <td className="p-1 font-mono whitespace-nowrap">{event.time}</td>
+                                                <td className="p-1 font-semibold whitespace-nowrap">{event.keyNumber}</td>
+                                                <td className="p-1 whitespace-nowrap">{event.previousStatus}</td>
+                                                <td className="p-1 whitespace-nowrap">{event.newStatus}</td>
+                                                <td className="p-1 text-red-500 font-semibold">{event.reason}</td>
+                                                <td className="p-1 font-mono whitespace-nowrap">{event.page}</td>
+                                                <td className="p-1 font-mono text-center">{event.retries}</td>
+                                              </tr>
+                                            ))
+                                          )}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+
                                 </div>
                               )}
                             </div>
@@ -4463,20 +4761,20 @@ export default function App() {
                                 <p className="text-xl font-display font-bold mt-0.5" style={{ color: 'var(--th-text)' }}>{healthStats.totalRecords}</p>
                               </div>
                               <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
-                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Unique Records</p>
-                                <p className="text-xl font-display font-bold text-green-600 mt-0.5">{healthStats.uniqueRecords}</p>
-                              </div>
-                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
                                 <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Duplicate Groups</p>
                                 <p className="text-xl font-display font-bold text-amber-600 mt-0.5">{healthStats.duplicateGroupsCount}</p>
                               </div>
                               <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
-                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Duplicate Entries</p>
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Records to Keep</p>
+                                <p className="text-xl font-display font-bold text-green-600 mt-0.5">{healthStats.totalRecords - healthStats.totalDuplicatesCount}</p>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Records to Delete</p>
                                 <p className="text-xl font-display font-bold text-rose-600 mt-0.5">{healthStats.totalDuplicatesCount}</p>
                               </div>
                             </div>
 
-                            <div className="p-4 rounded-2xl border grid grid-cols-1 sm:grid-cols-3 gap-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                            <div className="p-4 rounded-2xl border grid grid-cols-1 sm:grid-cols-4 gap-4" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
                               <div className="text-center sm:text-left border-b sm:border-b-0 sm:border-r border-gray-200/50 dark:border-slate-800 pb-3 sm:pb-0 sm:pr-4">
                                 <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Health Score</p>
                                 <p className={`text-2xl font-display font-bold mt-1 ${healthStats.score >= 90 ? 'text-green-600' : healthStats.score >= 70 ? 'text-amber-600' : 'text-rose-600'}`}>
@@ -4484,13 +4782,23 @@ export default function App() {
                                 </p>
                               </div>
                               <div className="text-center sm:text-left border-b sm:border-b-0 sm:border-r border-gray-200/50 dark:border-slate-800 pb-3 sm:pb-0 sm:px-4">
-                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Scan Duration</p>
-                                <p className="text-sm font-bold mt-2" style={{ color: 'var(--th-text)' }}>{healthStats.scanTimeMs} ms</p>
-                                <p className="text-[9px]" style={{ color: 'var(--th-text4)' }}>Last Scan: {healthStats.lastScanDate}</p>
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Latest CD Date Preserved</p>
+                                <p className="text-xs font-mono font-bold mt-2.5 text-green-600">{healthStats.latestPreservedDate}</p>
                               </div>
-                              <div className="text-center sm:text-left sm:pl-4">
-                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Removed Duplicates</p>
-                                <p className="text-lg font-bold mt-1 text-indigo-600">{healthStats.removedCount} entries</p>
+                              <div className="text-center sm:text-left border-b sm:border-b-0 sm:border-r border-gray-200/50 dark:border-slate-800 pb-3 sm:pb-0 sm:px-4">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Cleanup Status</p>
+                                <p className={`text-xs font-bold mt-2.5 ${healthStats.duplicateGroupsCount === 0 ? 'text-green-600' : 'text-amber-600'}`}>{healthStats.cleanupStatus}</p>
+                              </div>
+                              <div className="text-center sm:text-left sm:pl-4 space-y-1.5">
+                                <div className="flex flex-col">
+                                  <span className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Scan Duration</span>
+                                  <span className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>{healthStats.scanTimeMs} ms</span>
+                                  <span className="text-[8px] font-bold text-gray-500">{healthStats.lastScanDate}</span>
+                                </div>
+                                <div className="flex flex-col pt-0.5 border-t border-gray-200/40 dark:border-slate-850">
+                                  <span className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Removed Duplicates</span>
+                                  <span className="text-xs font-bold text-indigo-650">{healthStats.removedCount} entries</span>
+                                </div>
                               </div>
                             </div>
 

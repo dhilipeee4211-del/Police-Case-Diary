@@ -55,7 +55,10 @@ class DuplicateRemovalServiceService {
         `Removed duplicates for Crime No ${group.crimeNumber} at ${group.policeStation} (Preserved ID: ${group.originalRecord.id})`,
         {
           deletedRecordIds: idsToDelete,
-          originalRecordId: group.originalRecord.id
+          originalRecordId: group.originalRecord.id,
+          policeStation: group.policeStation,
+          crimeNumber: group.crimeNumber,
+          preservedCdDate: group.originalRecord.dateOfCd || 'N/A'
         }
       );
 
@@ -134,14 +137,20 @@ class DuplicateRemovalServiceService {
       }
 
       // 3. Log bulk actions
-      await AuditLogService.logAction(
-        adminEmail,
-        `Bulk cleanup removed ${totalToDelete} duplicates from ${groups.length} matching groups.`,
-        {
-          deletedRecordIds: Array.from(allIdsToDelete),
-          originalRecordId: 'BULK_ACTION'
-        }
-      );
+      for (const g of groups) {
+        const deletedIdsForGroup = g.duplicates.map(d => d.id);
+        await AuditLogService.logAction(
+          adminEmail,
+          `Bulk Removed duplicates for Crime No ${g.crimeNumber} at ${g.policeStation} (Preserved ID: ${g.originalRecord.id})`,
+          {
+            deletedRecordIds: deletedIdsForGroup,
+            originalRecordId: g.originalRecord.id,
+            policeStation: g.policeStation,
+            crimeNumber: g.crimeNumber,
+            preservedCdDate: g.originalRecord.dateOfCd || 'N/A'
+          }
+        );
+      }
 
       Logger.log(`✅ Bulk cleanup completed. Preserved all original records.`, 'SUCCESS');
       return totalToDelete;

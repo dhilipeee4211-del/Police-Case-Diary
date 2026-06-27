@@ -12,7 +12,9 @@ class ChunkProcessorClass {
     mode: 'free' | 'direct',
     startPage: number,
     endPage: number,
-    onProgress: (step: string) => void
+    onProgress: (step: string) => void,
+    chunkIndex?: number,
+    totalChunks?: number
   ): Promise<CaseDiary[]> {
     let payload = '';
 
@@ -32,7 +34,11 @@ class ChunkProcessorClass {
 
     // Call Gemini API client to extract data
     onProgress(`Structuring page(s) ${startPage}-${endPage} using Gemini AI...`);
-    const diaries = await GeminiClient.extractCaseDiaries(mode, payload, file.name, onProgress);
+    
+    const pageStr = startPage === endPage ? `${startPage}` : `${startPage}-${endPage}`;
+    const batchStr = chunkIndex !== undefined && totalChunks !== undefined ? `${chunkIndex + 1} / ${totalChunks}` : undefined;
+    
+    const diaries = await GeminiClient.extractCaseDiaries(mode, payload, file.name, onProgress, pageStr, batchStr);
 
     // Explicitly run garbage collection cleanup on reader to dispose OCR workers
     // if we completed a scanned chunk, to prevent memory creep

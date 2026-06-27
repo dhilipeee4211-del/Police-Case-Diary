@@ -58,21 +58,80 @@ function parseRobustJson(str: string) {
   }
 }
 
-const getVercelKeys = (): string[] => {
-  return [
-    process.env.GEMINI_API_KEY,
-    process.env.GEMINI_API_KEY_1,
-    process.env.GEMINI_API_KEY_2,
-    process.env.GEMINI_API_KEY_3,
-    process.env.GEMINI_API_KEY_4,
-    process.env.GEMINI_API_KEY_5,
-    process.env.GEMINI_API_KEY_6,
-    process.env.GEMINI_API_KEY_7,
-    process.env.GEMINI_API_KEY_8,
-    process.env.GEMINI_API_KEY_9,
-    process.env.GEMINI_API_KEY_10
-  ].filter(Boolean) as string[];
+interface GeminiKeyInfo {
+  name: string;
+  value: string;
+}
+
+const getVercelKeysInfo = (): GeminiKeyInfo[] => {
+  const keys: GeminiKeyInfo[] = [];
+  if (process.env.GEMINI_API_KEY) {
+    keys.push({ name: 'GEMINI_API_KEY', value: process.env.GEMINI_API_KEY });
+  }
+  
+  const suffixKeys: { num: number; name: string; value: string }[] = [];
+  for (const envKey of Object.keys(process.env)) {
+    const match = envKey.match(/^GEMINI_API_KEY_(\d+)$/);
+    if (match && process.env[envKey]) {
+      suffixKeys.push({
+        num: parseInt(match[1], 10),
+        name: envKey,
+        value: process.env[envKey]!
+      });
+    }
+  }
+  suffixKeys.sort((a, b) => a.num - b.num);
+  
+  suffixKeys.forEach(k => {
+    if (k.name !== 'GEMINI_API_KEY_1' || !process.env.GEMINI_API_KEY) {
+      keys.push({ name: k.name, value: k.value });
+    }
+  });
+  
+  return keys;
 };
+
+const getVercelKeys = (): string[] => {
+  return getVercelKeysInfo().map(k => k.value);
+};
+
+const runStartupValidation = () => {
+  console.log('================================================');
+  console.log('Gemini API Key Detection');
+  
+  const expectedKeys = [
+    'GEMINI_API_KEY',
+    'GEMINI_API_KEY_2',
+    'GEMINI_API_KEY_3',
+    'GEMINI_API_KEY_4',
+    'GEMINI_API_KEY_5'
+  ];
+  
+  for (const envKey of Object.keys(process.env)) {
+    const match = envKey.match(/^GEMINI_API_KEY_(\d+)$/);
+    if (match) {
+      const idx = parseInt(match[1], 10);
+      if (idx > 5 && !expectedKeys.includes(envKey)) {
+        expectedKeys.push(envKey);
+      }
+    }
+  }
+  
+  let activeCount = 0;
+  expectedKeys.forEach(k => {
+    if (process.env[k]) {
+      console.log(`✓ ${k} detected`);
+      activeCount++;
+    } else {
+      console.log(`⚠ ${k} not configured`);
+    }
+  });
+  
+  console.log(`Total Active Keys : ${activeCount}`);
+  console.log('================================================');
+};
+
+runStartupValidation();
 
 // API: Get secure Gemini API engine status (number of keys, rotation active status)
 app.get('/api/engine/status', (req, res) => {
@@ -110,6 +169,8 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
 
     const activeKeyHeader = req.headers['x-active-key-index'];
     const activeKeyIndex = activeKeyHeader ? parseInt(activeKeyHeader as string, 10) : 0;
+    const currentPage = req.body.currentPage || req.headers['x-current-page'] || 'N/A';
+    const currentBatch = req.body.currentBatch || req.headers['x-current-batch'] || 'N/A';
 
     const apiKeys = getVercelKeys();
 
@@ -207,11 +268,17 @@ Ensure that you:
     const startIndex = isNaN(activeKeyIndex) ? 0 : activeKeyIndex % apiKeys.length;
     let successfulKeyIndex = -1;
     let quotaErrorDetails = '';
+    const rotationEvents: any[] = [];
 
     keyLoop: for (let i = 0; i < apiKeys.length; i++) {
       const k = (startIndex + i) % apiKeys.length;
       const apiKey = apiKeys[k];
-      console.log(`Attempting document extraction using API Key index ${k + 1}/${apiKeys.length} (startIndex=${startIndex})`);
+      
+      console.log('================================================');
+      console.log(`Using Gemini Key #${k + 1}`);
+      console.log(`Page ${currentPage}`);
+      console.log(`Batch ${currentBatch}`);
+      console.log('================================================');
 
       const ai = new GoogleGenAI({
         apiKey,
@@ -226,6 +293,7 @@ Ensure that you:
         try {
           console.log(`Attempting document extraction with model: ${modelName} using API Key index ${k + 1}`);
 
+          const requestStart = Date.now();
           const response = await retryWithBackoff(() =>
             ai.models.generateContent({
               model: modelName,
@@ -243,23 +311,28 @@ Ensure that you:
               },
             })
           );
+          
+          const responseTime = Date.now() - requestStart;
+
+          console.log('================================================');
+          console.log('Gemini Request Successful');
+          console.log(`Key #${k + 1}`);
+          console.log('Response Time');
+          console.log(`${responseTime} ms`);
+          console.log('================================================');
 
           const responseText = response.text;
           if (!responseText) {
             throw new Error('Gemini API returned an empty response.');
           }
 
-          // Try parsing the response directly
           extractedData = parseRobustJson(responseText);
           successfulKeyIndex = k;
-          console.log(`Successfully extracted document contents using model: ${modelName} and API Key index ${k + 1}`);
-          break keyLoop; // Exit both loops on success
+          break keyLoop;
         } catch (err: any) {
           console.warn(`Model ${modelName} failed or was overloaded with API Key index ${k + 1}:`, err.message || err);
           lastError = err;
 
-          // Check if this error is a quota/rate-limit error (429 or RESOURCE_EXHAUSTED).
-          // If so, we should skip all remaining models for this API key and try the next key immediately.
           const errStr = String(err.message || err);
           const isQuotaExceeded =
             errStr.includes('Quota exceeded') ||
@@ -269,7 +342,45 @@ Ensure that you:
             err.code === 429;
 
           if (isQuotaExceeded) {
-            console.warn(`Quota exceeded for API Key index ${k + 1}. Transitioning to next API Key...`);
+            const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+            
+            console.log('================================================');
+            console.log('Quota Exceeded');
+            console.log(`Key #${k + 1}`);
+            console.log('Retry');
+            console.log('1 / 5');
+            console.log('================================================');
+
+            console.log('================================================');
+            console.log(`Switching to Key #${((k + 1) % apiKeys.length) + 1}`);
+            console.log('================================================');
+
+            console.log('================================================');
+            console.log(`Key #${((k + 1) % apiKeys.length) + 1} Activated`);
+            console.log(`Processing Page ${currentPage}`);
+            console.log('================================================');
+
+            console.log('================================================');
+            console.log('Current Key Status');
+            for (let idx = 0; idx < apiKeys.length; idx++) {
+              let statusName = 'Waiting';
+              if (idx === k) statusName = 'Exhausted';
+              else if (idx === (k + 1) % apiKeys.length) statusName = 'Active';
+              console.log(`Key #${idx + 1}`);
+              console.log(`${statusName}`);
+            }
+            console.log('================================================');
+
+            rotationEvents.push({
+              time: timeStr,
+              keyNumber: `Key #${k + 1}`,
+              previousStatus: 'Active',
+              newStatus: 'Quota Exhausted',
+              reason: 'RESOURCE_EXHAUSTED',
+              page: currentPage,
+              retries: '0'
+            });
+
             quotaErrorDetails = errStr;
             continue keyLoop;
           }
@@ -283,7 +394,8 @@ Ensure that you:
           error: 'All Gemini API keys have reached their quota.',
           allExhausted: true,
           totalKeys: apiKeys.length,
-          message: quotaErrorDetails
+          message: quotaErrorDetails,
+          rotationEvents
         });
       }
 
@@ -362,6 +474,7 @@ Ensure that you:
           noOfPwsExaminedSoFar: "0",
           noOfPwsExaminedToday: "0",
           totalNoOfAccusedCharged: "1",
+          totalNoOfAccusedPresent: "1",
           noOfAccusedPresent: "1",
           noOfAccusedAbsent: "0",
           remarks: "Note: Gemini AI is currently offline or rate-limited due to heavy demand. We have generated a structured Case Diary template using the file's metadata so you can manually review, complete, and reconstruct your case records without interruption.",
@@ -377,7 +490,8 @@ Ensure that you:
         fallbackUsed: true,
         activeKeyIndex: -1,
         totalKeys: apiKeys.length,
-        message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.'
+        message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.',
+        rotationEvents
       });
     }
 
@@ -386,7 +500,8 @@ Ensure that you:
       data: extractedData, 
       fallbackUsed: false,
       activeKeyIndex: successfulKeyIndex,
-      totalKeys: apiKeys.length
+      totalKeys: apiKeys.length,
+      rotationEvents
     });
   } catch (error: any) {
     console.error('Extraction error:', error);
@@ -406,6 +521,8 @@ app.post('/api/extract-text', async (req, res) => {
 
     const activeKeyHeader = req.headers['x-active-key-index'];
     const activeKeyIndex = activeKeyHeader ? parseInt(activeKeyHeader as string, 10) : 0;
+    const currentPage = req.body.currentPage || req.headers['x-current-page'] || 'N/A';
+    const currentBatch = req.body.currentBatch || req.headers['x-current-batch'] || 'N/A';
 
     const apiKeys = getVercelKeys();
 
@@ -506,11 +623,17 @@ Ensure that you:
     const startIndex = isNaN(activeKeyIndex) ? 0 : activeKeyIndex % apiKeys.length;
     let successfulKeyIndex = -1;
     let quotaErrorDetails = '';
+    const rotationEvents: any[] = [];
 
     keyLoop: for (let i = 0; i < apiKeys.length; i++) {
       const k = (startIndex + i) % apiKeys.length;
       const apiKey = apiKeys[k];
-      console.log(`Attempting text parsing using API Key index ${k + 1}/${apiKeys.length} (startIndex=${startIndex})`);
+      
+      console.log('================================================');
+      console.log(`Using Gemini Key #${k + 1}`);
+      console.log(`Page ${currentPage}`);
+      console.log(`Batch ${currentBatch}`);
+      console.log('================================================');
 
       const ai = new GoogleGenAI({
         apiKey,
@@ -525,6 +648,7 @@ Ensure that you:
         try {
           console.log(`Attempting raw text parsing with model: ${modelName} using API Key index ${k + 1}`);
 
+          const requestStart = Date.now();
           const response = await retryWithBackoff(() =>
             ai.models.generateContent({
               model: modelName,
@@ -534,6 +658,15 @@ Ensure that you:
               },
             })
           );
+          
+          const responseTime = Date.now() - requestStart;
+
+          console.log('================================================');
+          console.log('Gemini Request Successful');
+          console.log(`Key #${k + 1}`);
+          console.log('Response Time');
+          console.log(`${responseTime} ms`);
+          console.log('================================================');
 
           const responseText = response.text;
           if (!responseText) {
@@ -542,13 +675,11 @@ Ensure that you:
 
           extractedData = parseRobustJson(responseText);
           successfulKeyIndex = k;
-          console.log(`Successfully structured document from text using model: ${modelName} and API Key index ${k + 1}`);
           break keyLoop;
         } catch (err: any) {
           console.warn(`Model ${modelName} text parser failed or was overloaded with API Key index ${k + 1}:`, err.message || err);
           lastError = err;
 
-          // Check for quota/rate-limit error to fall back to the next key
           const errStr = String(err.message || err);
           const isQuotaExceeded =
             errStr.includes('Quota exceeded') ||
@@ -558,7 +689,45 @@ Ensure that you:
             err.code === 429;
 
           if (isQuotaExceeded) {
-            console.warn(`Quota exceeded for text parsing API Key index ${k + 1}. Transitioning to next API Key...`);
+            const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+            
+            console.log('================================================');
+            console.log('Quota Exceeded');
+            console.log(`Key #${k + 1}`);
+            console.log('Retry');
+            console.log('1 / 5');
+            console.log('================================================');
+
+            console.log('================================================');
+            console.log(`Switching to Key #${((k + 1) % apiKeys.length) + 1}`);
+            console.log('================================================');
+
+            console.log('================================================');
+            console.log(`Key #${((k + 1) % apiKeys.length) + 1} Activated`);
+            console.log(`Processing Page ${currentPage}`);
+            console.log('================================================');
+
+            console.log('================================================');
+            console.log('Current Key Status');
+            for (let idx = 0; idx < apiKeys.length; idx++) {
+              let statusName = 'Waiting';
+              if (idx === k) statusName = 'Exhausted';
+              else if (idx === (k + 1) % apiKeys.length) statusName = 'Active';
+              console.log(`Key #${idx + 1}`);
+              console.log(`${statusName}`);
+            }
+            console.log('================================================');
+
+            rotationEvents.push({
+              time: timeStr,
+              keyNumber: `Key #${k + 1}`,
+              previousStatus: 'Active',
+              newStatus: 'Quota Exhausted',
+              reason: 'RESOURCE_EXHAUSTED',
+              page: currentPage,
+              retries: '0'
+            });
+
             quotaErrorDetails = errStr;
             continue keyLoop;
           }
@@ -572,7 +741,8 @@ Ensure that you:
           error: 'All Gemini API keys have reached their quota.',
           allExhausted: true,
           totalKeys: apiKeys.length,
-          message: quotaErrorDetails
+          message: quotaErrorDetails,
+          rotationEvents
         });
       }
 
@@ -614,6 +784,7 @@ Ensure that you:
           noOfPwsExaminedSoFar: "0",
           noOfPwsExaminedToday: "0",
           totalNoOfAccusedCharged: "1",
+          totalNoOfAccusedPresent: "1",
           noOfAccusedPresent: "1",
           noOfAccusedAbsent: "0",
           remarks: "Note: Gemini AI is currently offline or rate-limited. We structured a basic template from the filename metadata.",
@@ -629,7 +800,8 @@ Ensure that you:
         fallbackUsed: true,
         activeKeyIndex: -1,
         totalKeys: apiKeys.length,
-        message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.'
+        message: lastError?.message || 'Gemini API was temporarily offline/rate-limited.',
+        rotationEvents
       });
     }
 
@@ -638,7 +810,8 @@ Ensure that you:
       data: extractedData, 
       fallbackUsed: false,
       activeKeyIndex: successfulKeyIndex,
-      totalKeys: apiKeys.length
+      totalKeys: apiKeys.length,
+      rotationEvents
     });
   } catch (error: any) {
     console.error('Extract text API error:', error);

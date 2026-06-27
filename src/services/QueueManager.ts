@@ -400,7 +400,9 @@ class QueueManagerService {
         (step) => {
           // Broadcast progress steps to logger
           Logger.log(`[${chunkIdStr}] ${step}`, 'INFO');
-        }
+        },
+        chunk.index,
+        this.currentQueue.chunks.length
       );
 
       // Append new diaries

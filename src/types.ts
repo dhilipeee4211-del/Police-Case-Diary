@@ -83,10 +83,31 @@ export interface ReconstructionQueue {
 export interface ApiKeyStatus {
   key: string;
   index: number;
-  status: 'active' | 'exhausted';
+  status: 'active' | 'healthy' | 'waiting' | 'initializing' | 'retrying' | 'quota_exhausted' | 'auth_failed' | 'unused';
   requestsProcessed: number;
   lastUsed: number;
   errorMessage?: string;
+  
+  // Enterprise Monitoring Fields
+  requests: number;
+  retries: number;
+  currentRetry?: number;
+  maxRetry?: number;
+  retryDelay?: number;
+  lastRetryTime?: string;
+  switchTime?: string;
+  reason?: string;
+  processing?: string;
+}
+
+export interface RotationHistoryEvent {
+  time: string;
+  keyNumber: string;
+  previousStatus: string;
+  newStatus: string;
+  reason: string;
+  page: string;
+  retries: string;
 }
 
 export interface ProgressMetadata {
