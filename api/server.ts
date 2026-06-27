@@ -1598,19 +1598,21 @@ app.post('/api/health/backup/restore', async (req, res) => {
 });
 
 // Endpoint: Transaction-safe duplicate cleanup
-// 1. Backup duplicates into case_diary_duplicate_backup
-// 2. Verify backup succeeded
-// 3. Remove duplicates from case_databases
-// 4. Verify deletion
+// Accepts lightweight group descriptors (IDs only), fetches full records from Supabase.
+// 1. Fetch full records for each duplicate ID from Supabase
+// 2. Backup duplicates into case_diary_duplicate_backup
+// 3. Verify backup succeeded
+// 4. Remove duplicates from case_databases
 // 5. Rollback if any step fails
 app.post('/api/health/cleanup', async (req, res) => {
   if (!supabaseServerClient) {
-    return res.status(503).json({ error: 'Supabase not configured.' });
+    return res.status(503).json({ success: false, error: 'Supabase not configured.' });
   }
 
+  // Lightweight payload: each group has { policeStation, crimeNumber, originalRecordId, originalRecordDbId, duplicateIds: [{id, dbId}] }
   const { groups, adminEmail } = req.body || {};
   if (!groups || !Array.isArray(groups) || groups.length === 0) {
-    return res.status(400).json({ error: 'No groups provided for cleanup' });
+    return res.status(400).json({ success: false, error: 'No groups provided for cleanup' });
   }
 
   const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
@@ -1619,30 +1621,60 @@ app.post('/api/health/cleanup', async (req, res) => {
   const deletedCounts: Record<string, number> = {};
 
   try {
-    // ── Phase A: Backup all duplicates ────────────────────────────────────────
-    console.log(`[Cleanup ${sessionId}] Phase A: Backing up ${groups.length} groups...`);
+    // ── Phase A: Fetch full records and backup ──────────────────────────────────
+    console.log(`[Cleanup ${sessionId}] Phase A: Fetching and backing up ${groups.length} groups...`);
 
     for (const group of groups) {
-      for (const dup of (group.duplicates || [])) {
-        const backupId = `dup-backup-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-        const { error: backupInsertErr } = await supabaseServerClient
-          .from('case_diary_duplicate_backup')
-          .insert({
-            id: backupId,
-            original_record_id: dup.id,
-            original_record: JSON.stringify(dup),
-            backup_timestamp: backupTimestamp,
-            deleted_by: adminEmail || 'admin',
-            delete_reason: `Duplicate of ${group.originalRecord?.id} for PS: ${group.policeStation} CR: ${group.crimeNumber}`,
-            cleanup_session_id: sessionId,
-            original_created_date: dup.dateOfCd || dup.dateOfReportTime || '',
-            original_updated_date: (dup as any).updated_at || (dup as any).updatedAt || ''
-          });
+      const { policeStation, crimeNumber, originalRecordId, duplicateIds } = group as {
+        policeStation: string;
+        crimeNumber: string;
+        originalRecordId: string;
+        duplicateIds: Array<{ id: string; dbId: string }>;
+      };
 
-        if (backupInsertErr) {
-          throw new Error(`Backup insert failed for record ${dup.id}: ${backupInsertErr.message}`);
+      if (!duplicateIds || duplicateIds.length === 0) continue;
+
+      // Collect all dbIds needed
+      const dbIdSet = new Set(duplicateIds.map(d => d.dbId).filter(Boolean));
+
+      for (const dbId of dbIdSet) {
+        const { data: dbRow, error: fetchErr } = await supabaseServerClient
+          .from('case_databases')
+          .select('diaries')
+          .eq('id', dbId)
+          .maybeSingle();
+
+        if (fetchErr) throw new Error(`Fetch database ${dbId} failed: ${fetchErr.message}`);
+        if (!dbRow) continue;
+
+        const allDiaries: any[] = Array.isArray(dbRow.diaries) ? dbRow.diaries : [];
+        const dupIdsInThisDb = new Set(
+          duplicateIds.filter(d => d.dbId === dbId).map(d => d.id)
+        );
+
+        const dupsToBackup = allDiaries.filter((d: any) => dupIdsInThisDb.has(d.id));
+
+        for (const dup of dupsToBackup) {
+          const backupId = `dup-backup-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+          const { error: backupInsertErr } = await supabaseServerClient
+            .from('case_diary_duplicate_backup')
+            .insert({
+              id: backupId,
+              original_record_id: dup.id,
+              original_record: JSON.stringify(dup),
+              backup_timestamp: backupTimestamp,
+              deleted_by: adminEmail || 'admin',
+              delete_reason: `Duplicate of ${originalRecordId} for PS: ${policeStation} CR: ${crimeNumber}`,
+              cleanup_session_id: sessionId,
+              original_created_date: dup.dateOfCd || dup.dateOfReportTime || '',
+              original_updated_date: (dup as any).updated_at || (dup as any).updatedAt || ''
+            });
+
+          if (backupInsertErr) {
+            throw new Error(`Backup insert failed for record ${dup.id}: ${backupInsertErr.message}`);
+          }
+          backedUpIds.push(backupId);
         }
-        backedUpIds.push(backupId);
       }
     }
 
@@ -1661,18 +1693,15 @@ app.post('/api/health/cleanup', async (req, res) => {
     // ── Phase C: Remove duplicates from databases ──────────────────────────────
     console.log(`[Cleanup ${sessionId}] Phase C: Deleting duplicates from databases...`);
 
-    // Collect all duplicate IDs to delete grouped by dbId
+    // Collect all duplicate IDs to delete, grouped by dbId
     const deleteByDbId = new Map<string, Set<string>>();
     for (const group of groups) {
-      for (const dup of (group.duplicates || [])) {
+      for (const dup of ((group as any).duplicateIds || [])) {
         const dbId = dup.dbId || '';
         if (!deleteByDbId.has(dbId)) deleteByDbId.set(dbId, new Set());
         deleteByDbId.get(dbId)!.add(dup.id);
       }
     }
-
-    // Track original states for rollback
-    const originalDiariesSnapshot = new Map<string, any[]>();
 
     for (const [dbId, idsToRemove] of deleteByDbId.entries()) {
       const { data: dbRow, error: fetchErr } = await supabaseServerClient
@@ -1685,8 +1714,6 @@ app.post('/api/health/cleanup', async (req, res) => {
       if (!dbRow) continue;
 
       const current: any[] = Array.isArray(dbRow.diaries) ? dbRow.diaries : [];
-      originalDiariesSnapshot.set(dbId, current);
-
       const filtered = current.filter((d: any) => !idsToRemove.has(d.id));
       deletedCounts[dbId] = current.length - filtered.length;
 
@@ -1727,7 +1754,7 @@ app.post('/api/health/cleanup', async (req, res) => {
       }
     }
 
-    return res.status(500).json({ error: err.message || 'Cleanup transaction failed', sessionId });
+    return res.status(500).json({ success: false, error: err.message || 'Cleanup transaction failed', sessionId });
   }
 });
 

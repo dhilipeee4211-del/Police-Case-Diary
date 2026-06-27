@@ -35,17 +35,28 @@ export interface CleanupResult {
 class BackupManagerServiceClass {
   private readonly baseUrl = '/api';
 
+  private async safeFetchJson(url: string, init?: RequestInit): Promise<{ res: Response; data: any }> {
+    const res = await fetch(url, init);
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error(`Server returned non-JSON response (status ${res.status}): ${text.slice(0, 300)}`);
+    }
+    return { res, data };
+  }
+
   /**
    * Lists all backup records from case_diary_duplicate_backup table, paginated.
    */
   public async listBackups(page = 1, pageSize = 50): Promise<BackupListResponse> {
     try {
-      const res = await fetch(`${this.baseUrl}/health/backup/list`, {
+      const { data } = await this.safeFetchJson(`${this.baseUrl}/health/backup/list`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ page, pageSize })
       });
-      const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to list backups');
       return data as BackupListResponse;
     } catch (err: any) {
@@ -59,12 +70,11 @@ class BackupManagerServiceClass {
    */
   public async deleteBackup(id: string): Promise<void> {
     try {
-      const res = await fetch(`${this.baseUrl}/health/backup/delete`, {
+      const { data } = await this.safeFetchJson(`${this.baseUrl}/health/backup/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
       });
-      const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to delete backup');
       Logger.log(`BackupManager: Permanently deleted backup ${id}`, 'SUCCESS');
     } catch (err: any) {
@@ -84,12 +94,11 @@ class BackupManagerServiceClass {
     targetDbId: string
   ): Promise<{ success: boolean; reason?: string; message?: string }> {
     try {
-      const res = await fetch(`${this.baseUrl}/health/backup/restore`, {
+      const { data } = await this.safeFetchJson(`${this.baseUrl}/health/backup/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, targetDbId })
       });
-      const data = await res.json();
       if (data.success) {
         Logger.log(`BackupManager: Restored backup ${id} → database ${targetDbId}`, 'SUCCESS');
       } else if (data.reason === 'duplicate') {
@@ -107,7 +116,12 @@ class BackupManagerServiceClass {
   /**
    * Executes a transaction-safe cleanup of the specified duplicate groups
    * via the backend /api/health/cleanup endpoint.
-   * The backend performs: Backup → Verify → Delete → Rollback on failure.
+   *
+   * IMPORTANT: Only sends lightweight ID descriptors to the backend — NOT full
+   * case diary objects — to stay well within Vercel's 4.5 MB request body limit.
+   * The server fetches the full records from Supabase itself.
+   *
+   * The backend performs: Fetch → Backup → Verify → Delete → Rollback on failure.
    */
   public async runTransactionSafeCleanup(
     groups: Array<{
@@ -119,13 +133,20 @@ class BackupManagerServiceClass {
     adminEmail: string
   ): Promise<CleanupResult> {
     try {
-      const res = await fetch(`${this.baseUrl}/health/cleanup`, {
+      // Build a lightweight payload: only IDs, no full objects
+      const lightweightGroups = groups.map(g => ({
+        policeStation: g.policeStation,
+        crimeNumber: g.crimeNumber,
+        originalRecordId: g.originalRecord?.id || '',
+        originalRecordDbId: g.originalRecord?.dbId || '',
+        duplicateIds: (g.duplicates || []).map(d => ({ id: d.id, dbId: d.dbId || '' }))
+      }));
+
+      const { res, data } = await this.safeFetchJson(`${this.baseUrl}/health/cleanup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groups, adminEmail })
+        body: JSON.stringify({ groups: lightweightGroups, adminEmail })
       });
-
-      const data = await res.json();
 
       if (!res.ok || !data.success) {
         throw new Error(data.error || `Cleanup failed with status ${res.status}`);
