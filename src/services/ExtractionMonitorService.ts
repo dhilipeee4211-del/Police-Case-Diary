@@ -427,14 +427,14 @@ class ExtractionMonitorServiceClass {
             retry_count: c.retryCount,
             updated_at: Date.now(),
           })),
-          logs: logBatch.map(l => ({
-            id: `log-${l.timestamp}-${Math.random().toString(36).substr(2, 5)}`,
-            level: l.type.toLowerCase(),
-            message: l.message,
+          logs: logBatch.length > 0 ? [{
+            id: 'last_system_activity',
+            level: logBatch[logBatch.length - 1].type.toLowerCase(),
+            message: logBatch[logBatch.length - 1].message,
             category: 'engine',
             session_id: this.snapshot.sessionId,
-            timestamp: l.timestamp,
-          })),
+            timestamp: logBatch[logBatch.length - 1].timestamp,
+          }] : [],
         })
       });
 

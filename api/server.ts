@@ -1869,12 +1869,12 @@ app.post('/api/monitor/sync', async (req, res) => {
         .from('case_diary_extraction_chunks')
         .upsert(batch, { onConflict: 'id' });
     }
-    // Insert log rows (max 100 at once, no upsert — IDs are unique per call)
+    // Upsert log rows (max 100 at once, override existing single row)
     if (Array.isArray(logs) && logs.length > 0) {
       const logBatch = logs.slice(0, 100);
       await supabaseServerClient
         .from('system_activity_logs')
-        .insert(logBatch);
+        .upsert(logBatch, { onConflict: 'id' });
     }
     return res.json({ success: true });
   } catch (err: any) {
