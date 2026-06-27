@@ -78,7 +78,9 @@ app.post('/api/extract', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Only PDF files are supported' });
     }
 
+    const clientKey = req.headers['x-gemini-key'] as string;
     const apiKeys = [
+      clientKey,
       process.env.GEMINI_API_KEY,
       process.env.GEMINI_API_KEY_2,
       process.env.GEMINI_API_KEY_3,
@@ -352,7 +354,9 @@ app.post('/api/extract-text', async (req, res) => {
       return res.status(400).json({ error: 'No raw text provided for reconstruction.' });
     }
 
+    const clientKey = req.headers['x-gemini-key'] as string;
     const apiKeys = [
+      clientKey,
       process.env.GEMINI_API_KEY,
       process.env.GEMINI_API_KEY_2,
       process.env.GEMINI_API_KEY_3,

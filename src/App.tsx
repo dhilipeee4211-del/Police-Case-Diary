@@ -55,6 +55,15 @@ import { CaseDiary, Accused, SavedDatabase } from './types';
 import { saveSavedDatabase, getSavedDatabases, deleteSavedDatabase, getSavedDatabaseById } from './dbHelper';
 import { extractTextFromPdfClientSide, loadPdfJs } from './clientOcr';
 
+// Reconstruction Engine Services
+import { Logger } from './services/Logger';
+import { StorageManager } from './services/StorageManager';
+import { ApiKeyManager } from './services/ApiKeyManager';
+import { QueueManager } from './services/QueueManager';
+import { RecoveryManager } from './services/RecoveryManager';
+import { ProgressManager } from './services/ProgressManager';
+
+
 // Helper functions for IndexedDB storage to bypass localStorage 5MB quota limit on large datasets/PDF chunks
 function saveToIndexedDB(key: string, value: any): Promise<void> {
   return new Promise((resolve) => {
@@ -349,6 +358,7 @@ export default function App() {
   const [adminSelectedDbId, setAdminSelectedDbId] = useState<string>('');
   const [isUpdatingAccess, setIsUpdatingAccess] = useState<boolean>(false);
   const [showMobileEditor, setShowMobileEditor] = useState<boolean>(false);
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
 
   // Conversion States
   const [dragActive, setDragActive] = useState<boolean>(false);
@@ -430,6 +440,24 @@ export default function App() {
   } | null>(null);
   const [isLoadingSupaStatus, setIsLoadingSupaStatus] = useState<boolean>(false);
 
+  // Network online/offline detection
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      addLocalLog('Network reconnected. You can retry the extraction.', 'SUCCESS');
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      addLocalLog('Network disconnected. Extraction paused.', 'ERROR');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   const fetchSupabaseStatus = async (retryCount = 0) => {
     setIsLoadingSupaStatus(true);
     try {
@@ -477,6 +505,19 @@ export default function App() {
   const [gatewayDbId, setGatewayDbId] = useState<string | null>(null);
   const [recoveryQueue, setRecoveryQueue] = useState<any | null>(null);
 
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+  const [apiKeysInput, setApiKeysInput] = useState<string>('');
+  const [concurrencyLimit, setConcurrencyLimit] = useState<number>(1);
+  const [chunkSize, setChunkSize] = useState<number>(1);
+
+  const configuredKeysCount = apiKeysInput.split('\n').map(k => k.trim()).filter(Boolean).length;
+  const activeKeyIdxToShow = ApiKeyManager.getActiveKeyIndex();
+  const activeKeyStatus = ApiKeyManager.getKeyStatuses()[activeKeyIdxToShow];
+  const keyStatusMsg = activeKeyStatus && activeKeyStatus.status === 'exhausted' 
+    ? `Key #${activeKeyIdxToShow + 1} Exhausted: ${activeKeyStatus.errorMessage || 'Quota Exceeded'}` 
+    : '';
+
+
   const [importConflictData, setImportConflictData] = useState<{
     dbName: string;
     diaries: CaseDiary[];
@@ -484,59 +525,90 @@ export default function App() {
   } | null>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Load API Keys on mount
   useEffect(() => {
-    getFromIndexedDB('gateway_extraction_queue')
-      .then((parsed) => {
-        if (parsed && parsed.chunks && parsed.nextIndex < parsed.chunks.length) {
-          setRecoveryQueue(parsed);
-        }
-      })
-      .catch((err) => {
-        console.warn("Failed to read recovery queue on mount from IndexedDB:", err);
-      });
+    const savedKeys = ApiKeyManager.getKeys();
+    setApiKeysInput(savedKeys.join('\n'));
+  }, []);
+
+  const handleApiKeysInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setApiKeysInput(value);
+    const keysList = value.split('\n');
+    ApiKeyManager.setKeys(keysList);
+  };
+
+  // Initialize RecoveryManager and sync queue state once user is logged in
+  useEffect(() => {
+    if (user) {
+      RecoveryManager.initialize(user.uid);
+    }
+  }, [user]);
+
+  // Hook up QueueManager and Logger to existing React state
+  useEffect(() => {
+    const unsubscribeQueue = QueueManager.subscribe((status) => {
+      setIsExtracting(status.state === 'processing');
+      setIsPaused(status.state === 'paused');
+      setExtractionProgress(status.progress);
+      setGatewayDbId(status.dbId);
+      setLastExtractedDiaries(status.diaries);
+
+      // Track recoveryQueue state for the recovery banner UI block
+      if (status.state === 'paused' && status.totalChunks > 0 && status.currentChunkIndex < status.totalChunks) {
+        setRecoveryQueue({
+          filename: status.dbName || 'Reconstruction',
+          nextIndex: status.currentChunkIndex,
+          chunks: { length: status.totalChunks }
+        });
+      } else {
+        setRecoveryQueue(null);
+      }
+
+      let stepText = '';
+      if (status.state === 'processing') {
+        const remainingStr = status.eta > 0 
+          ? `ETA: ${Math.floor(status.eta / 60)}m ${status.eta % 60}s` 
+          : 'Calculating ETA...';
+        stepText = `Batch ${status.currentChunkIndex + 1}/${status.totalChunks} • Speed: ${status.speed} p/m • ${remainingStr}`;
+      } else if (status.state === 'completed') {
+        stepText = 'Reconstruction completed successfully!';
+      } else if (status.state === 'paused') {
+        stepText = 'Reconstruction paused.';
+      } else if (status.state === 'error') {
+        stepText = `Reconstruction failed: ${status.error || 'Unknown error'}`;
+      } else if (status.state === 'idle' && status.totalChunks > 0) {
+        stepText = `Ready to process (${status.totalChunks} batches)`;
+      }
+      setExtractionStep(stepText);
+
+      if (status.error) {
+        setConversionError(status.error);
+      } else {
+        setConversionError(null);
+      }
+    });
+
+    const unsubscribeLogger = Logger.subscribe((logMessages) => {
+      setExtractionLogs(logMessages.map(m => m.formatted));
+    });
+
+    return () => {
+      unsubscribeQueue();
+      unsubscribeLogger();
+    };
   }, []);
 
   const handleDismissRecovery = () => {
-    removeFromIndexedDB('gateway_extracted_diaries');
-    removeFromIndexedDB('gateway_extraction_queue');
+    QueueManager.dismissRecovery();
     setRecoveryQueue(null);
   };
 
-  const handleResumeRecovery = async () => {
-    if (!recoveryQueue) return;
-    
-    let savedDiaries: CaseDiary[] = [];
-    try {
-      const cached = await getFromIndexedDB('gateway_extracted_diaries');
-      if (cached) {
-        savedDiaries = cached;
-      }
-    } catch (err) {
-      console.warn("Failed to load cached diaries on resume:", err);
-    }
-
-    setLastExtractedDiaries(savedDiaries);
-    setGatewayDbName(recoveryQueue.gatewayDbName || '');
-    setGatewayDbId(recoveryQueue.gatewayDbId || null);
-    
-    const dummyFile = new File([], recoveryQueue.filename, { type: 'application/pdf' });
-    setSelectedFile(dummyFile);
-    
-    const queueToProcess = {
-      chunks: recoveryQueue.chunks,
-      mode: recoveryQueue.mode,
-      filename: recoveryQueue.filename,
-      nextIndex: recoveryQueue.nextIndex,
-      chunkSize: recoveryQueue.chunkSize,
-      startPageOffset: recoveryQueue.startPageOffset,
-      gatewayDbName: recoveryQueue.gatewayDbName,
-      gatewayDbId: recoveryQueue.gatewayDbId
-    };
-
+  const handleResumeRecovery = () => {
+    QueueManager.resume();
     setRecoveryQueue(null);
-    setCurrentExtractionQueue(queueToProcess);
-    await processQueue(queueToProcess);
   };
+
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1100,6 +1172,14 @@ export default function App() {
     try {
       const generatedDbId = gatewayDbId || `db-${Date.now()}`;
       const taggedDiaries = lastExtractedDiaries.map(d => ({ ...d, dbId: generatedDbId }));
+      
+      // Preserve any existing reconstruction progress metadata
+      const existingDb = savedDatabases.find(db => db.id === generatedDbId);
+      const metadataDiary = existingDb?.diaries?.find(d => d.id === '__reconstruction_metadata__');
+      if (metadataDiary) {
+        taggedDiaries.push(metadataDiary);
+      }
+
       const saved = await saveSavedDatabase(dbName, taggedDiaries, user.uid, generatedDbId);
       setSavedDatabases((prev) => {
         const filtered = prev.filter(db => db.id !== saved.id);
@@ -1107,10 +1187,11 @@ export default function App() {
       });
       setGatewayDbId(saved.id);
 
-      // Merge newly extracted tagged diaries into workspace
+      // Merge newly extracted tagged diaries (excluding metadata) into workspace
+      const cleanDiaries = taggedDiaries.filter(d => d.id !== '__reconstruction_metadata__');
       setDiaries(prev => {
-        const otherDiaries = prev.filter(d => !taggedDiaries.some(td => td.id === d.id));
-        return [...otherDiaries, ...taggedDiaries];
+        const otherDiaries = prev.filter(d => !cleanDiaries.some(td => td.id === d.id));
+        return [...otherDiaries, ...cleanDiaries];
       });
 
       setSaveDbStatus({ type: 'success', message: `Successfully saved as "${dbName}"!` });
@@ -1122,6 +1203,7 @@ export default function App() {
       setSaveDbStatus({ type: 'error', message: err.message || 'Failed to save to database.' });
     }
   };
+
 
   const handleExportDatabase = async (dbItem: SavedDatabase) => {
     try {
@@ -1331,7 +1413,11 @@ export default function App() {
   const handleLoadSelectedCases = async (dbItem: SavedDatabase) => {
     const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
     if (!loadedDb || !loadedDb.diaries) return;
-    const selectedDiaries = loadedDb.diaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
+    
+    // Filter out reconstruction progress metadata diary from workspace loading
+    const cleanDiaries = loadedDb.diaries.filter(d => d.id !== '__reconstruction_metadata__');
+    const selectedDiaries = cleanDiaries.filter(d => selectedDatabaseCaseIds.includes(d.id));
+    
     if (selectedDiaries.length > 0) {
       setDiaries(prev => {
         const combined = [...prev];
@@ -1351,11 +1437,18 @@ export default function App() {
   const handleViewDatabaseDraft = async (dbItem: SavedDatabase) => {
     const loadedDb = await ensureDatabaseDiariesLoaded(dbItem.id);
     if (loadedDb && loadedDb.diaries && loadedDb.diaries.length > 0) {
+      // Filter out reconstruction progress metadata diary from workspace loading
+      const cleanDiaries = loadedDb.diaries.filter(d => d.id !== '__reconstruction_metadata__');
+      if (cleanDiaries.length === 0) {
+        alert("This database contains no case records.");
+        return;
+      }
+
       const firstDiary = diaries.find(d => d.dbId === dbItem.id);
       if (firstDiary) {
         setSelectedDiaryId(firstDiary.id);
       } else {
-        const mapped = loadedDb.diaries.map(d => ({ ...d, dbId: dbItem.id }));
+        const mapped = cleanDiaries.map(d => ({ ...d, dbId: dbItem.id }));
         setDiaries(prev => {
           const combined = [...prev, ...mapped];
           const seen = new Set<string>();
@@ -1366,7 +1459,7 @@ export default function App() {
             return true;
           });
         });
-        setSelectedDiaryId(loadedDb.diaries[0].id);
+        setSelectedDiaryId(cleanDiaries[0].id);
       }
       setActiveTab('editor');
     } else {
@@ -1379,6 +1472,14 @@ export default function App() {
     setSaveDbStatus({ type: 'loading', message: 'Updating your database library...' });
     try {
       const dbDiaries = diaries.filter(d => d.dbId === loadedDbId);
+      
+      // Find and preserve existing progress metadata diary from loaded databases list, if it exists
+      const existingDb = savedDatabases.find(db => db.id === loadedDbId);
+      const metadataDiary = existingDb?.diaries?.find(d => d.id === '__reconstruction_metadata__');
+      if (metadataDiary) {
+        dbDiaries.push(metadataDiary);
+      }
+
       const saved = await saveSavedDatabase(loadedDbName || "Database", dbDiaries, user.uid, loadedDbId);
       setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
       setSaveDbStatus({ type: 'success', message: 'Database updated successfully!' });
@@ -1391,6 +1492,7 @@ export default function App() {
       setSaveDbStatus({ type: 'error', message: err.message || 'Failed to update database.' });
     }
   };
+
 
   const handleDeleteDatabase = async (id: string) => {
     if (!user) return;
@@ -1617,364 +1719,15 @@ export default function App() {
   };
 
   const handlePause = () => {
-    isPausedRef.current = true;
-    setIsPaused(true);
-    addLocalLog('Reconstruction paused. You can resume later.', 'SYSTEM');
+    QueueManager.pause();
   };
 
   const handleResume = () => {
-    isPausedRef.current = false;
-    isCancelledRef.current = false;
-    setIsPaused(false);
-    if (currentExtractionQueue) {
-      processQueue(currentExtractionQueue);
-    }
+    QueueManager.resume();
   };
 
   const handleCancel = async () => {
-    isCancelledRef.current = true;
-    isPausedRef.current = false;
-    setIsPaused(false);
-    setIsExtracting(false);
-    setExtractionProgress(0);
-    setExtractionStep('');
-    setCurrentExtractionQueue(null);
-    addLocalLog('Reconstruction cancelled by user.', 'SYSTEM');
-    try {
-      await removeFromIndexedDB('gateway_extraction_queue');
-      await removeFromIndexedDB('gateway_extracted_diaries');
-    } catch (_) {}
-  };
-
-  const processQueue = async (queue: {
-    chunks: any[];
-    mode: 'free' | 'direct';
-    filename: string;
-    nextIndex: number;
-    chunkSize: number;
-    startPageOffset: number;
-    gatewayDbName?: string;
-    gatewayDbId?: string | null;
-  }) => {
-    setIsExtracting(true);
-    setIsPaused(false);
-    isPausedRef.current = false;
-    isCancelledRef.current = false;
-    setConversionError(null);
-
-    const { chunks, mode, filename, nextIndex, chunkSize, startPageOffset } = queue;
-    const dbName = queue.gatewayDbName || gatewayDbName || `Database - Extracted ${Date.now()}`;
-    let activeDbId = queue.gatewayDbId || gatewayDbId;
-
-    // Load initial accumulated diaries for chunk merging
-    let accumulatedDiaries: CaseDiary[] = [];
-    if (nextIndex > 0) {
-      try {
-        const cached = await getFromIndexedDB('gateway_extracted_diaries');
-        if (cached) {
-          accumulatedDiaries = cached;
-        }
-      } catch (e) {
-        console.warn("Failed to load cached diaries from IndexedDB", e);
-      }
-    }
-
-    let currentProcessingIdx = nextIndex;
-
-    try {
-      for (let cIdx = nextIndex; cIdx < chunks.length; cIdx++) {
-        currentProcessingIdx = cIdx;
-        // Cancel check
-        if (isCancelledRef.current) {
-          addLocalLog('Reconstruction cancelled.', 'SYSTEM');
-          setIsExtracting(false);
-          return;
-        }
-        if (isPausedRef.current) {
-          setCurrentExtractionQueue({
-            chunks,
-            mode,
-            filename,
-            nextIndex: cIdx,
-            chunkSize,
-            startPageOffset,
-            gatewayDbName: dbName,
-            gatewayDbId: activeDbId
-          });
-          setIsExtracting(false);
-          return;
-        }
-
-        const chunk = chunks[cIdx];
-        const startPage = startPageOffset + cIdx * chunkSize + 1;
-        const endPage = startPageOffset + Math.min((cIdx + 1) * chunkSize, chunks.length * chunkSize);
-
-        const apiEndpoint = mode === 'free' ? '/api/extract-text' : '/api/extract';
-        const requestBody = mode === 'free' 
-          ? { text: chunk, filename }
-          : { file: chunk, filename: `batch-${cIdx + 1}.pdf` };
-
-        addLocalLog(`Processing batch ${cIdx + 1} of ${chunks.length} (Pages ${startPage} to ${endPage})...`, 'AI');
-        setExtractionStep(`Structuring batch ${cIdx + 1}/${chunks.length} (Pages ${startPage}-${endPage})...`);
-        
-        const baseProgress = Math.floor((cIdx / chunks.length) * 100);
-        setExtractionProgress(baseProgress);
-
-        let response: Response;
-        let retriesLeft = 4;
-        let delayMs = 3000;
-        
-        while (true) {
-          // Cancel check inside retry loop
-          if (isCancelledRef.current) {
-            setIsExtracting(false);
-            return;
-          }
-          if (isPausedRef.current) {
-            setCurrentExtractionQueue({
-              chunks,
-              mode,
-              filename,
-              nextIndex: cIdx,
-              chunkSize,
-              startPageOffset,
-              gatewayDbName: dbName,
-              gatewayDbId: activeDbId
-            });
-            setIsExtracting(false);
-            return;
-          }
-
-          response = await fetch(apiEndpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBody),
-          });
-          
-          if (response.ok) {
-            break;
-          }
-          
-          const isRateLimited = response.status === 429;
-          const isServerError = response.status >= 500;
-          
-          if (isRateLimited && retriesLeft === 0) {
-            // All retries exhausted — save accumulated data FIRST, then raise quota error
-            if (accumulatedDiaries.length > 0 && user) {
-              try {
-                addLocalLog(`Gemini quota hit at batch ${cIdx + 1}. Saving ${accumulatedDiaries.length} already-extracted record(s) before stopping...`, 'SYSTEM');
-                const saved = await saveSavedDatabase(dbName, accumulatedDiaries, user.uid, activeDbId || undefined);
-                activeDbId = saved.id;
-                setGatewayDbId(saved.id);
-                setSavedDatabases(prev => {
-                  const filtered = prev.filter(db => db.id !== saved.id);
-                  return [saved, ...filtered];
-                });
-                addLocalLog(`✅ ${accumulatedDiaries.length} record(s) saved to database successfully.`, 'SUCCESS');
-              } catch (saveErr: any) {
-                addLocalLog(`Failed to save partial data: ${saveErr.message}`, 'ERROR');
-              }
-            }
-            const savedCount = accumulatedDiaries.length;
-            const quotaErr = new Error(
-              `⚠️ Gemini API quota exceeded (429) at batch ${cIdx + 1} of ${chunks.length}. ${
-                savedCount > 0
-                  ? `${savedCount} record(s) from completed batches have been saved to your database.`
-                  : 'No records were extracted before the quota was hit.'
-              } Please wait and try again later, or switch to 'Unlimited Free' mode.`
-            );
-            (quotaErr as any).isQuotaError = true;
-            throw quotaErr;
-          }
-          
-          if (retriesLeft > 0 && (isRateLimited || isServerError)) {
-            const reason = isRateLimited ? "Rate limit (429)" : `Server status (${response.status})`;
-            addLocalLog(`${reason} encountered. Retrying batch ${cIdx + 1} in ${delayMs / 1000}s... (${retriesLeft} retries left)`, 'SYSTEM');
-            await new Promise(resolve => setTimeout(resolve, delayMs));
-            retriesLeft--;
-            delayMs *= 2;
-          } else {
-            const errorText = await response.text();
-            throw new Error(errorText || `Extraction failed for batch ${cIdx + 1} (${response.status})`);
-          }
-        }
-
-        const contentType = response.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          const responseText = await response.text();
-          if (responseText.trim().startsWith('<!') || responseText.trim().startsWith('<html')) {
-            throw new Error('The backend server returned HTML instead of JSON.');
-          }
-          throw new Error(`Expected JSON response, but received content-type "${contentType}" for batch ${cIdx + 1}`);
-        }
-
-        const chunkResult = await response.json();
-        
-        // If server used its Gemini-exhausted fallback, treat as quota error — save accumulated data first, then stop
-        if (chunkResult && chunkResult.fallbackUsed) {
-          if (accumulatedDiaries.length > 0 && user) {
-            try {
-              addLocalLog(`Gemini API exhausted at batch ${cIdx + 1}. Saving ${accumulatedDiaries.length} already-extracted record(s) before stopping...`, 'SYSTEM');
-              const saved = await saveSavedDatabase(dbName, accumulatedDiaries, user.uid, activeDbId || undefined);
-              activeDbId = saved.id;
-              setGatewayDbId(saved.id);
-              setSavedDatabases(prev => {
-                const filtered = prev.filter(db => db.id !== saved.id);
-                return [saved, ...filtered];
-              });
-              addLocalLog(`✅ ${accumulatedDiaries.length} record(s) saved to database successfully.`, 'SUCCESS');
-            } catch (saveErr: any) {
-              addLocalLog(`Failed to save partial data: ${saveErr.message}`, 'ERROR');
-            }
-          }
-          const savedCount = accumulatedDiaries.length;
-          const quotaErr = new Error(
-            `⚠️ Gemini API quota exceeded — all API keys exhausted at batch ${cIdx + 1} of ${chunks.length}. ${
-              savedCount > 0
-                ? `${savedCount} record(s) from completed batches have been saved to your database.`
-                : 'No records were extracted before the quota was hit.'
-            } Please wait and retry, or switch to 'Unlimited Free' mode.`
-          );
-          (quotaErr as any).isQuotaError = true;
-          throw quotaErr;
-        }
-        
-        if (chunkResult && chunkResult.success && Array.isArray(chunkResult.data)) {
-          // Process and map chunkResult.data to CaseDiary format
-          const rawDiaries: CaseDiary[] = chunkResult.data.map((diary: any, idx: number) => ({
-            ...diary,
-            id: `${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
-            policeStation: diary.policeStation || 'VIKKIRAMANGALAM',
-            district: diary.district || 'ARIYALUR',
-            crNoAndSecOfLaw: diary.crNoAndSecOfLaw || '0288/2018',
-            dateTimeAndPlaceOfOccurrence: diary.dateTimeAndPlaceOfOccurrence || '',
-            dateOfCd: diary.dateOfCd || '',
-            dateOfReportTime: diary.dateOfReportTime || '',
-            complainant: diary.complainant || '',
-            accusedList: Array.isArray(diary.accusedList) ? diary.accusedList : [],
-            propertyLostDetails: diary.propertyLostDetails || '',
-            recoveredPropertyDetails: diary.recoveredPropertyDetails || '',
-            dateOfPreviousCaseDiary: diary.dateOfPreviousCaseDiary || '',
-            stageOfTheCase: diary.stageOfTheCase || 'PENDING TRIAL',
-            courtRefNo: diary.courtRefNo || '',
-            hearingNo: diary.hearingNo || '',
-            courtNameAndPlace: diary.courtNameAndPlace || '',
-            whetherMagistratePresent: diary.whetherMagistratePresent || 'YES',
-            whetherAppPpPresent: diary.whetherAppPpPresent || 'YES',
-            whetherDefenceCounselPresent: diary.whetherDefenceCounselPresent || 'NO',
-            noOfPwsCited: diary.noOfPwsCited || '0',
-            noOfPwsExaminedSoFar: diary.noOfPwsExaminedSoFar || '0',
-            noOfPwsExaminedToday: diary.noOfPwsExaminedToday || '0',
-            totalNoOfAccusedCharged: diary.totalNoOfAccusedCharged || '0',
-            noOfAccusedPresent: diary.noOfAccusedPresent || '0',
-            noOfAccusedAbsent: diary.noOfAccusedAbsent || '0',
-            remarks: diary.remarks || '',
-            postedFor: diary.postedFor || '',
-            nextHearingDate: diary.nextHearingDate || '',
-            attendedBy: diary.attendedBy || '',
-          }));
-
-          const combined = [...accumulatedDiaries, ...rawDiaries];
-          const seenKeys = new Set<string>();
-          const filteredAccumulated: CaseDiary[] = [];
-          combined.forEach((diary) => {
-            const key = `${(diary.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(diary.policeStation || '').trim().toLowerCase()}_${(diary.dateOfCd || '').trim().toLowerCase()}`;
-            if (!seenKeys.has(key)) {
-              seenKeys.add(key);
-              filteredAccumulated.push(diary);
-            }
-          });
-          accumulatedDiaries = filteredAccumulated;
-
-          appendChunkDiaries(chunkResult.data);
-          addLocalLog(`Successfully structured batch ${cIdx + 1} of ${chunks.length}.`, 'SUCCESS');
-
-          // Cache current extraction state in IndexedDB for sudden disconnect recovery
-          await saveToIndexedDB('gateway_extracted_diaries', accumulatedDiaries);
-          const updatedQueueState = {
-            chunks,
-            mode,
-            filename,
-            nextIndex: cIdx + 1,
-            chunkSize,
-            startPageOffset,
-            gatewayDbName: dbName,
-            gatewayDbId: activeDbId
-          };
-          await saveToIndexedDB('gateway_extraction_queue', updatedQueueState);
-
-          // Auto-save parsed results to database in the background as they are fetched
-          if (user) {
-            addLocalLog(`Auto-saving ${accumulatedDiaries.length} records to Cloud database...`, 'SYSTEM');
-            try {
-              const saved = await saveSavedDatabase(dbName, accumulatedDiaries, user.uid, activeDbId || undefined);
-              activeDbId = saved.id;
-              setGatewayDbId(saved.id);
-              
-              // Update state list
-              setSavedDatabases((prev) => {
-                const filtered = prev.filter(db => db.id !== saved.id);
-                return [saved, ...filtered];
-              });
-              
-              // Re-save queue to IndexedDB to record the persistent database ID
-              updatedQueueState.gatewayDbId = saved.id;
-              await saveToIndexedDB('gateway_extraction_queue', updatedQueueState);
-              addLocalLog(`Cloud Auto-save successful (DB ID: ${saved.id}).`, 'SUCCESS');
-            } catch (dbErr: any) {
-              console.error("Cloud Auto-save failed:", dbErr);
-              addLocalLog(`Cloud Auto-save failed: ${dbErr.message || dbErr}. Data is cached in browser.`, 'ERROR');
-            }
-          }
-        } else {
-          throw new Error(`Invalid structured data format returned for batch ${cIdx + 1}.`);
-        }
-
-        if (cIdx < chunks.length - 1) {
-          addLocalLog(`Pacing request flow... Waiting 2.5s before next batch...`, 'SYSTEM');
-          await new Promise(resolve => setTimeout(resolve, 2500));
-        }
-      }
-
-      setExtractionProgress(100);
-      setExtractionStep('Reconstruction completed successfully!');
-      addLocalLog('Pipeline complete. Rendering data schemas in Workspace...', 'SUCCESS');
-      
-      // Clean up IndexedDB caches since pipeline is fully complete
-      await removeFromIndexedDB('gateway_extraction_queue');
-      await removeFromIndexedDB('gateway_extracted_diaries');
-      
-      setCurrentExtractionQueue(null);
-      setIsExtracting(false);
-    } catch (err: any) {
-      console.error('Queue processing error:', err);
-      const isQuotaError = !!(err as any).isQuotaError;
-      addLocalLog(err.message || 'Unknown processing exception occurred.', 'ERROR');
-      setConversionError(err.message || 'Failed to complete formatting reconstruction. Please retry.');
-      setIsExtracting(false);
-      
-      if (!isQuotaError) {
-        // Only allow resume from a normal error — not a quota error
-        setCurrentExtractionQueue({
-          chunks,
-          mode,
-          filename,
-          nextIndex: currentProcessingIdx,
-          chunkSize,
-          startPageOffset,
-          gatewayDbName: dbName,
-          gatewayDbId: activeDbId
-        });
-      } else {
-        // Quota error: already saved partial data before throwing — just clear queue state
-        setCurrentExtractionQueue(null);
-        await removeFromIndexedDB('gateway_extraction_queue');
-        await removeFromIndexedDB('gateway_extracted_diaries');
-        addLocalLog('Queue cleared. Any successfully extracted records before the quota limit have been saved to your database.', 'SYSTEM');
-      }
-    }
+    await QueueManager.cancel();
   };
 
   const runExtraction = async () => {
@@ -1985,139 +1738,22 @@ export default function App() {
       return;
     }
 
-    setIsExtracting(true);
-    setIsPaused(false);
-    isPausedRef.current = false;
-    setConversionError(null);
-    setExtractionProgress(5);
-    setExtractionLogs([]);
-    setLastExtractedDiaries([]);
-    setGatewayDbId(null);
-    await removeFromIndexedDB('gateway_extraction_queue');
-    await removeFromIndexedDB('gateway_extracted_diaries');
-
-    addLocalLog('Starting case diary reconstruction pipeline...', 'SYSTEM');
-    addLocalLog(`Target file: "${selectedFile.name}" (${(selectedFile.size / 1024).toFixed(1)} KB)`, 'SYSTEM');
-    addLocalLog(`Extraction mode: ${extractionMode === 'free' ? 'Unlimited Free (Local Browser OCR)' : 'Cloud Upload (Direct multi-modal)'}`, 'SYSTEM');
-    addLocalLog(`Start Page configuration: page ${startPageInput}`, 'SYSTEM');
-
-    try {
-      let numPages = 0;
-      try {
-        const pdfjsLib = await loadPdfJs();
-        const precheckBuffer = await selectedFile.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: precheckBuffer }).promise;
-        numPages = pdf.numPages;
-        addLocalLog(`Verified PDF structure: ${numPages} page(s) found.`, 'SYSTEM');
-      } catch (err: any) {
-        console.warn("Failed to precheck page count client-side:", err);
-      }
-
-      if (extractionMode === 'free') {
-        setExtractionStep('Initializing high-fidelity Client-Side PDF Engine...');
-        addLocalLog('Bootstrapping local client-side PDF renderer...', 'INFO');
-        
-        const extractedText = await extractTextFromPdfClientSide(selectedFile, (percent, step) => {
-          const scaledPercent = Math.floor(5 + (percent / 100) * 80);
-          setExtractionProgress(scaledPercent);
-          setExtractionStep(step);
-          addLocalLog(step, 'INFO');
-        }, startPageInput);
-
-        if (!extractedText || extractedText.trim().length === 0) {
-          throw new Error('Could not extract any readable text or OCR characters from this PDF file locally.');
-        }
-
-        addLocalLog(`Successfully extracted ${extractedText.length} characters of raw text.`, 'SUCCESS');
-        addLocalLog('Preparing structured content layout formatting rules...', 'SYSTEM');
-
-        const parts = extractedText.split(/--- PAGE \d+(?: \(SCANNED OCR\))? ---/);
-        const pages = parts.slice(1).map(p => p.trim());
-        
-        const chunkSize = 2;
-        const chunks: string[] = [];
-        for (let i = 0; i < pages.length; i += chunkSize) {
-          const chunkPages = pages.slice(i, i + chunkSize);
-          let chunkText = "";
-          for (let j = 0; j < chunkPages.length; j++) {
-            const globalPageNum = (startPageInput - 1) + i + j + 1;
-            chunkText += `\n\n--- PAGE ${globalPageNum} ---\n\n` + chunkPages[j];
-          }
-          chunks.push(chunkText);
-        }
-
-        addLocalLog(`Segmented document into ${chunks.length} processing batch(es).`, 'SYSTEM');
-        
-        const queue = {
-          chunks,
-          mode: 'free' as const,
-          filename: selectedFile.name,
-          nextIndex: 0,
-          chunkSize,
-          startPageOffset: startPageInput - 1,
-          gatewayDbName: gatewayDbName.trim(),
-          gatewayDbId: null
-        };
-        
-        setCurrentExtractionQueue(queue);
-        await processQueue(queue);
-
-      } else {
-        setExtractionStep('Initializing Direct Document Gateway...');
-        addLocalLog('Reading file structure into memory buffer...', 'INFO');
-        
-        const fileBufferVal = await selectedFile.arrayBuffer();
-        
-        const { PDFDocument } = await import('pdf-lib');
-        addLocalLog('Parsing PDF pages into direct multi-modal processing gateway...', 'SYSTEM');
-        const srcDoc = await PDFDocument.load(fileBufferVal);
-        const pageCount = srcDoc.getPageCount();
-        
-        const chunkSize = 2;
-        const chunks: string[] = [];
-        
-        for (let i = startPageInput - 1; i < pageCount; i += chunkSize) {
-          const newDoc = await PDFDocument.create();
-          const pagesToCopy = Array.from(
-            { length: Math.min(chunkSize, pageCount - i) },
-            (_, idx) => i + idx
-          );
-          const copiedPages = await newDoc.copyPages(srcDoc, pagesToCopy);
-          copiedPages.forEach(page => newDoc.addPage(page));
-          const newPdfBytes = await newDoc.save();
-          
-          let binary = '';
-          const len = newPdfBytes.byteLength;
-          for (let k = 0; k < len; k++) {
-            binary += String.fromCharCode(newPdfBytes[k]);
-          }
-          const base64 = window.btoa(binary);
-          chunks.push(base64);
-        }
-
-        addLocalLog(`Segmented document into ${chunks.length} upload batch(es).`, 'SYSTEM');
-
-        const queue = {
-          chunks,
-          mode: 'direct' as const,
-          filename: selectedFile.name,
-          nextIndex: 0,
-          chunkSize,
-          startPageOffset: startPageInput - 1,
-          gatewayDbName: gatewayDbName.trim(),
-          gatewayDbId: null
-        };
-
-        setCurrentExtractionQueue(queue);
-        await processQueue(queue);
-      }
-    } catch (err: any) {
-      console.error('Reconstruction setup error:', err);
-      addLocalLog(err.message || 'Error initializing extraction.', 'ERROR');
-      setConversionError(err.message || 'Failed to initialize formatting reconstruction.');
-      setIsExtracting(false);
+    if (!user) {
+      alert("Please sign in before starting the reconstruction.");
+      return;
     }
+
+    Logger.clear();
+    await QueueManager.enqueue(selectedFile, extractionMode, {
+      dbName: gatewayDbName.trim(),
+      startPage: startPageInput,
+      chunkSize,
+      concurrency: concurrencyLimit,
+      userId: user.uid,
+      dbId: gatewayDbId
+    });
   };
+
 
   const activeDiary = diaries.find((d) => d.id === selectedDiaryId);
 
@@ -2182,6 +1818,14 @@ export default function App() {
     if (user && loadedDbId) {
       try {
         const dbDiaries = updatedDiaries.filter(d => d.dbId === loadedDbId);
+        
+        // Find and preserve existing progress metadata diary if it exists
+        const existingDb = savedDatabases.find(db => db.id === loadedDbId);
+        const metadataDiary = existingDb?.diaries?.find(d => d.id === '__reconstruction_metadata__');
+        if (metadataDiary) {
+          dbDiaries.push(metadataDiary);
+        }
+
         const saved = await saveSavedDatabase(loadedDbName || "Database", dbDiaries, user.uid, loadedDbId);
         setSavedDatabases((prev) => prev.map(db => db.id === loadedDbId ? saved : db));
       } catch (err) {
@@ -2637,6 +2281,103 @@ export default function App() {
                           />
                         </div>
 
+                        {/* Collapsible Advanced Settings */}
+                        <div className="border rounded-2xl p-3" style={{ borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}>
+                          <button
+                            type="button"
+                            onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                            className="w-full flex items-center justify-between text-xs font-bold cursor-pointer"
+                            style={{ color: 'var(--th-text2)' }}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <Shield className="w-3.5 h-3.5" style={{ color: 'var(--th-primary)' }} />
+                              Advanced Engine Configuration
+                            </span>
+                            <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${showAdvancedSettings ? 'rotate-180' : ''}`} />
+                          </button>
+                          
+                          {showAdvancedSettings && (
+                            <div
+                              className="mt-3 space-y-3 pt-3 border-t flex flex-col"
+                              style={{ borderColor: 'var(--th-border2)' }}
+                            >
+                              {/* API Keys Configuration */}
+                              <div className="flex flex-col gap-1.5">
+                                <label className="text-[9px] font-bold uppercase tracking-wider flex justify-between" style={{ color: 'var(--th-text4)' }}>
+                                  <span>Gemini API Keys (One per line)</span>
+                                  <span className="text-[8px] font-mono text-indigo-500">Local Cache Rotation</span>
+                                </label>
+                                <textarea
+                                  placeholder="Paste API keys here (e.g. AIzaSy...)"
+                                  value={apiKeysInput}
+                                  onChange={handleApiKeysInputChange}
+                                  rows={3}
+                                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-[10.5px] font-mono shadow-sm"
+                                  style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                                />
+                              </div>
+
+                              {/* Concurrency and Chunk Size */}
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
+                                    Max Concurrency
+                                  </label>
+                                  <select
+                                    value={concurrencyLimit}
+                                    onChange={(e) => setConcurrencyLimit(Number(e.target.value))}
+                                    className="w-full bg-white border border-gray-200 rounded-xl px-2.5 py-2 text-xs font-semibold"
+                                    style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                                  >
+                                    <option value={1}>1 request (Safe)</option>
+                                    <option value={2}>2 requests (Fast)</option>
+                                  </select>
+                                </div>
+
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
+                                    Pages per Chunk
+                                  </label>
+                                  <select
+                                    value={chunkSize}
+                                    onChange={(e) => setChunkSize(Number(e.target.value))}
+                                    className="w-full bg-white border border-gray-200 rounded-xl px-2.5 py-2 text-xs font-semibold"
+                                    style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                                  >
+                                    <option value={1}>1 page (Memory efficient)</option>
+                                    <option value={2}>2 pages (Standard)</option>
+                                    <option value={5}>5 pages (Speedy)</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              {/* Telemetry/API Key statuses */}
+                              {configuredKeysCount > 0 && (
+                                <div className="p-2.5 rounded-xl text-[10px] space-y-1.5 font-medium border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border2)' }}>
+                                  <div className="flex justify-between items-center text-[9px] font-bold uppercase tracking-wider" style={{ color: 'var(--th-text4)' }}>
+                                    <span>Engine Status</span>
+                                    <span className="text-[8px] px-1 bg-green-500 text-white rounded">ROTATION ACTIVE</span>
+                                  </div>
+                                  <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                    <span>Configured Keys:</span>
+                                    <span className="font-mono font-bold">{configuredKeysCount}</span>
+                                  </div>
+                                  <div className="flex justify-between" style={{ color: 'var(--th-text3)' }}>
+                                    <span>Active Key Index:</span>
+                                    <span className="font-mono font-bold">#{activeKeyIdxToShow + 1}</span>
+                                  </div>
+                                  {keyStatusMsg && (
+                                    <div className="text-[9px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded font-mono break-all mt-1">
+                                      {keyStatusMsg}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+
                         <button
                           id="start-convert-btn"
                           onClick={runExtraction}
@@ -2651,9 +2392,38 @@ export default function App() {
                     )}
 
                     {conversionError && (
-                      <div className="mt-4 p-3 border text-xs rounded-xl flex gap-2.5" style={{ background: 'var(--th-error-bg)', borderColor: 'var(--th-error-border)', color: 'var(--th-error)' }}>
-                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                        <span>{conversionError}</span>
+                      <div className="mt-4 border text-xs rounded-xl overflow-hidden" style={{ borderColor: 'var(--th-error-border)' }}>
+                        <div className="p-3 flex gap-2.5" style={{ background: 'var(--th-error-bg)', color: 'var(--th-error)' }}>
+                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                          <span className="flex-1">{conversionError}</span>
+                        </div>
+                        {/* Retry button — shown when there's a resumable queue */}
+                        {currentExtractionQueue && !isExtracting && (
+                          <div className="px-3 py-2.5 flex items-center justify-between gap-3" style={{ background: 'var(--th-surface2)', borderTop: '1px solid var(--th-error-border)' }}>
+                            <div className="flex items-center gap-1.5">
+                              {!isOnline ? (
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block"></span>
+                                  <span className="text-[10px] font-semibold" style={{ color: 'var(--th-text3)' }}>Waiting for network...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
+                                  <span className="text-[10px] font-semibold text-green-700">Network restored — ready to retry</span>
+                                </>
+                              )}
+                            </div>
+                            <button
+                              onClick={handleResume}
+                              disabled={!isOnline}
+                              className="flex items-center gap-1.5 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                              style={{ background: isOnline ? 'var(--th-primary)' : 'var(--th-text4)' }}
+                            >
+                              <RefreshCw className={`w-3 h-3 ${isOnline ? '' : 'animate-spin'}`} />
+                              {isOnline ? `Retry from Batch ${(currentExtractionQueue.nextIndex ?? 0) + 1}` : 'Waiting...'}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
 

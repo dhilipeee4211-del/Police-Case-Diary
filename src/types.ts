@@ -47,3 +47,59 @@ export interface SavedDatabase {
   diaryCount?: number;
   synced?: boolean;
 }
+
+// --- Reconstruction Engine Types ---
+
+export type QueueState = 'idle' | 'processing' | 'paused' | 'cancelled' | 'error' | 'completed';
+
+export type ChunkStatus = 'pending' | 'processing' | 'completed' | 'retrying' | 'failed' | 'paused' | 'cancelled';
+
+export interface ReconstructionChunk {
+  index: number;
+  startPage: number;
+  endPage: number;
+  data: string; // Base64 PDF bytes or text string
+  status: ChunkStatus;
+  error?: string;
+  retryCount: number;
+}
+
+export interface ReconstructionQueue {
+  id: string;
+  filename: string;
+  mode: 'free' | 'direct';
+  chunks: ReconstructionChunk[];
+  currentChunkIndex: number;
+  totalPages: number;
+  startPageOffset: number;
+  gatewayDbName: string;
+  gatewayDbId: string | null;
+  activeKeyIndex: number;
+  concurrencyLimit: number;
+  timestamp: number;
+  resumeToken?: string;
+}
+
+export interface ApiKeyStatus {
+  key: string;
+  index: number;
+  status: 'active' | 'exhausted';
+  requestsProcessed: number;
+  lastUsed: number;
+  errorMessage?: string;
+}
+
+export interface ProgressMetadata {
+  pdfId: string;
+  filename: string;
+  currentPage: number;
+  completedPages: number[];
+  failedPages: number[];
+  remainingPages: number[];
+  queueState: QueueState;
+  currentBatch: number;
+  retryCount: number;
+  apiKeyIndex: number;
+  timestamp: number;
+  resumeToken?: string;
+}
