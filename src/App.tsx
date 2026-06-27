@@ -838,9 +838,23 @@ export default function App() {
         setIsScanning(true);
         const adminEmail = user?.email || 'admin@gmail.com';
 
-        // Call backend transaction-safe endpoint
-        const result = await BackupManagerService.runTransactionSafeCleanup(duplicateGroups, adminEmail);
-        const removed = result.totalDeleted;
+        // Chunking implementation for Vercel Free Serverless limits
+        const chunkSize = 10;
+        let totalRemoved = 0;
+        const totalChunks = Math.ceil(duplicateGroups.length / chunkSize);
+        
+        for (let i = 0; i < duplicateGroups.length; i += chunkSize) {
+          const chunk = duplicateGroups.slice(i, i + chunkSize);
+          const chunkNum = Math.floor(i / chunkSize) + 1;
+          
+          setHealthStats(prev => ({
+            ...prev,
+            cleanupStatus: `Cleaning chunk ${chunkNum} of ${totalChunks}...`
+          }));
+
+          const result = await BackupManagerService.runTransactionSafeCleanup(chunk, adminEmail);
+          totalRemoved += result.totalDeleted;
+        }
 
         // Refresh databases list from Supabase
         const dbs = await getSavedDatabases(user?.uid || '');
@@ -872,16 +886,16 @@ export default function App() {
           uniqueRecords: unique,
           duplicateGroupsCount: updatedResults.length,
           totalDuplicatesCount: newTotalDuplicates,
-          removedCount: prev.removedCount + removed,
+          removedCount: prev.removedCount + totalRemoved,
           score: healthScore,
           latestPreservedDate,
           cleanupStatus
         }));
 
         await loadBackupsAndLogs();
-        alert(`Successfully removed ${removed} duplicate records!`);
+        alert(`Successfully removed ${totalRemoved} duplicate records in ${totalChunks} chunks!`);
       } catch (err: any) {
-        alert(`Bulk cleanup failed and changes were safely rolled back: ${err.message || err}`);
+        alert(`Bulk cleanup failed during execution: ${err.message || err}`);
       } finally {
         setIsScanning(false);
       }
