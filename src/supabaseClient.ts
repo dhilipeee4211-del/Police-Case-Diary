@@ -50,9 +50,23 @@ CREATE TABLE IF NOT EXISTS database_access (
   PRIMARY KEY (email, db_id)
 );
 
--- Enable Row Level Security (RLS) on both tables
+-- Create the case_diary_duplicate_backup table
+CREATE TABLE IF NOT EXISTS case_diary_duplicate_backup (
+  id TEXT PRIMARY KEY,
+  original_record_id TEXT NOT NULL,
+  original_record JSONB NOT NULL,
+  backup_timestamp BIGINT NOT NULL,
+  deleted_by TEXT NOT NULL,
+  delete_reason TEXT NOT NULL,
+  cleanup_session_id TEXT NOT NULL,
+  original_created_date TEXT,
+  original_updated_date TEXT
+);
+
+-- Enable Row Level Security (RLS) on all tables
 ALTER TABLE case_databases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE database_access ENABLE ROW LEVEL SECURITY;
+ALTER TABLE case_diary_duplicate_backup ENABLE ROW LEVEL SECURITY;
 
 -- Create policies for case_databases
 CREATE POLICY "Allow select for user" ON case_databases FOR SELECT USING (true);
@@ -65,5 +79,10 @@ CREATE POLICY "Allow select for all" ON database_access FOR SELECT USING (true);
 CREATE POLICY "Allow insert for all" ON database_access FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow update for all" ON database_access FOR UPDATE USING (true);
 CREATE POLICY "Allow delete for all" ON database_access FOR DELETE USING (true);
+
+-- Create policies for case_diary_duplicate_backup
+CREATE POLICY "Allow select for backup" ON case_diary_duplicate_backup FOR SELECT USING (true);
+CREATE POLICY "Allow insert for backup" ON case_diary_duplicate_backup FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow delete for backup" ON case_diary_duplicate_backup FOR DELETE USING (true);
 `;
 }

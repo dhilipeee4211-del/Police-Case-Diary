@@ -8,6 +8,8 @@ import {
   FileText, 
   UploadCloud, 
   CheckCircle, 
+  CheckCircle2,
+  Upload,
   ArrowLeft,
   ArrowRight, 
   Lock, 
@@ -68,7 +70,8 @@ import { DuplicateGroup, parseCdDate } from './services/DuplicateScanner';
 import { QueueManager } from './services/QueueManager';
 import { RecoveryManager } from './services/RecoveryManager';
 import { ProgressManager } from './services/ProgressManager';
-
+import { validateAndPlanImport, ImportValidationReport } from './services/ImportValidationService';
+import { BackupManagerService, DuplicateBackupRecord } from './services/BackupManagerService';
 
 // Helper functions for IndexedDB storage to bypass localStorage 5MB quota limit on large datasets/PDF chunks
 function saveToIndexedDB(key: string, value: any): Promise<void> {
@@ -591,6 +594,20 @@ export default function App() {
   const [backupsList, setBackupsList] = useState<any[]>([]);
   const [auditLogsList, setAuditLogsList] = useState<any[]>([]);
 
+  // Backup Manager State
+  const [backupManagerRecords, setBackupManagerRecords] = useState<DuplicateBackupRecord[]>([]);
+  const [backupManagerTotal, setBackupManagerTotal] = useState<number>(0);
+  const [backupManagerPage, setBackupManagerPage] = useState<number>(1);
+  const [isLoadingBackupManager, setIsLoadingBackupManager] = useState<boolean>(false);
+  const [backupManagerError, setBackupManagerError] = useState<string | null>(null);
+  const [healthSubTab, setHealthSubTab] = useState<'scanner' | 'backup_manager'>('scanner');
+  const [restoreTargetDbId, setRestoreTargetDbId] = useState<string>('');
+
+  // Import Validation State
+  const [importValidationReport, setImportValidationReport] = useState<ImportValidationReport | null>(null);
+  const [showImportValidationModal, setShowImportValidationModal] = useState<boolean>(false);
+  const [importValidationDbName, setImportValidationDbName] = useState<string>('');
+  const [isImportingValidated, setIsImportingValidated] = useState<boolean>(false);
 
   const [importConflictData, setImportConflictData] = useState<{
     dbName: string;
@@ -612,6 +629,53 @@ export default function App() {
       setAuditLogsList(audits);
     } catch (err) {
       console.error("Failed to load backups/audit logs:", err);
+    }
+  };
+
+  const loadBackupManagerRecords = async (page = 1) => {
+    setIsLoadingBackupManager(true);
+    setBackupManagerError(null);
+    try {
+      const result = await BackupManagerService.listBackups(page, 50);
+      setBackupManagerRecords(result.records);
+      setBackupManagerTotal(result.total);
+      setBackupManagerPage(page);
+    } catch (err: any) {
+      setBackupManagerError(err.message || 'Failed to load backup records');
+    } finally {
+      setIsLoadingBackupManager(false);
+    }
+  };
+
+  const handleDeleteBackupRecord = async (id: string) => {
+    if (!confirm('Permanently delete this backup record? This cannot be undone.')) return;
+    try {
+      await BackupManagerService.deleteBackup(id);
+      setBackupManagerRecords(prev => prev.filter(r => r.id !== id));
+      setBackupManagerTotal(prev => Math.max(0, prev - 1));
+    } catch (err: any) {
+      alert(`Failed to delete backup: ${err.message}`);
+    }
+  };
+
+  const handleRestoreBackupRecord = async (record: DuplicateBackupRecord) => {
+    if (!restoreTargetDbId) {
+      alert('Please select a target database to restore into.');
+      return;
+    }
+    if (!confirm(`Restore "${record.original_record?.policeStation} / ${record.original_record?.crNoAndSecOfLaw}" into the selected database?`)) return;
+    try {
+      const result = await BackupManagerService.restoreBackup(record.id, restoreTargetDbId);
+      if (result.success) {
+        alert('✅ Record restored successfully!');
+        loadBackupManagerRecords(backupManagerPage);
+      } else if (result.reason === 'duplicate') {
+        alert(`⚠️ Restore blocked: ${result.message}`);
+      } else {
+        alert(`Restore failed: ${result.message || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      alert(`Restore error: ${err.message}`);
     }
   };
 
@@ -702,11 +766,14 @@ export default function App() {
   };
 
   const handleRemoveGroupDuplicates = async (group: DuplicateGroup) => {
-    const confirmMsg = `You are about to remove ${group.duplicates.length} duplicate record(s).\n\nThe newest Case Diary (latest CD Date) in each duplicate group will be preserved.\n\nAll older duplicate records will be permanently deleted.\n\nThis action cannot be undone.\n\nDo you want to continue?`;
+    const confirmMsg = `You are about to remove ${group.duplicates.length} duplicate record(s).\n\nThe newest Case Diary (latest CD Date) in each duplicate group will be preserved.\n\nAll older duplicate records will be moved to backup storage (case_diary_duplicate_backup) and deleted from the active list.\n\nDo you want to continue?`;
     if (window.confirm(confirmMsg)) {
       try {
         setIsScanning(true);
-        await DataHealthService.removeGroupDuplicates(group, user?.email || 'admin@gmail.com', savedDatabases);
+        const adminEmail = user?.email || 'admin@gmail.com';
+        
+        // Call backend transaction-safe endpoint
+        await BackupManagerService.runTransactionSafeCleanup([group], adminEmail);
         
         // Refresh databases list from Supabase
         const dbs = await getSavedDatabases(user?.uid || '');
@@ -745,7 +812,7 @@ export default function App() {
         }));
 
         await loadBackupsAndLogs();
-        alert("Duplicates removed successfully!");
+        alert("Duplicates removed successfully and backed up into the separate table.");
       } catch (err: any) {
         alert(`Failed to remove duplicates: ${err.message || err}`);
       } finally {
@@ -765,15 +832,15 @@ export default function App() {
       totalDuplicates += g.duplicates.length;
     });
 
-    const confirmMsg = `You are about to remove ${totalDuplicates} duplicate records.\n\nThe newest Case Diary (latest CD Date) in each duplicate group will be preserved.\n\nAll older duplicate records will be permanently deleted.\n\nThis action cannot be undone.\n\nDo you want to continue?`;
+    const confirmMsg = `You are about to remove ${totalDuplicates} duplicate records.\n\nThe newest Case Diary (latest CD Date) in each duplicate group will be preserved.\n\nAll older duplicate records will be moved to backup storage (case_diary_duplicate_backup) and deleted from the active list.\n\nDo you want to continue?`;
     if (window.confirm(confirmMsg)) {
       try {
         setIsScanning(true);
-        const removed = await DataHealthService.bulkRemoveAllDuplicates(
-          duplicateGroups,
-          user?.email || 'admin@gmail.com',
-          savedDatabases
-        );
+        const adminEmail = user?.email || 'admin@gmail.com';
+
+        // Call backend transaction-safe endpoint
+        const result = await BackupManagerService.runTransactionSafeCleanup(duplicateGroups, adminEmail);
+        const removed = result.totalDeleted;
 
         // Refresh databases list from Supabase
         const dbs = await getSavedDatabases(user?.uid || '');
@@ -1544,62 +1611,104 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const fileExtension = file.name.split('.').pop()?.toLowerCase() || '';
+    const isCSV = fileExtension === 'csv';
+    const fileType: 'json' | 'csv' = isCSV ? 'csv' : 'json';
+
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
-        const parsed = JSON.parse(text);
 
-        if (!parsed.name || !Array.isArray(parsed.diaries)) {
-          alert("Invalid backup file format. Must contain a database name and case diary list.");
-          return;
-        }
+        // Derive a database name from file name
+        const rawDbName = file.name.replace(/\.(json|csv)$/i, '').trim() || 'Imported Database';
 
-        const dbName = parsed.name.trim();
-        const importedDiaries = parsed.diaries;
-
-        // Check for duplicate name
-        const existingDb = savedDatabases.find(db => db.name.toLowerCase() === dbName.toLowerCase());
-
-        if (existingDb) {
-          // Open custom conflict resolution dialog modal
-          setImportConflictData({
-            dbName,
-            diaries: importedDiaries,
-            existingDb
+        // Collect all existing diaries for duplicate detection
+        const allExistingDiaries: CaseDiary[] = [];
+        savedDatabases.forEach(db => {
+          (db.diaries || []).forEach(d => {
+            if (d.id !== '__reconstruction_metadata__') allExistingDiaries.push(d);
           });
-        } else {
-          // No conflict, save directly
-          setSaveDbStatus({ type: 'loading', message: `Importing database "${dbName}"...` });
-          const generatedDbId = `db-${Date.now()}`;
-          const taggedDiaries = importedDiaries.map((d: CaseDiary) => ({ ...d, dbId: generatedDbId }));
-          const saved = await saveSavedDatabase(dbName, taggedDiaries, user.uid, generatedDbId);
-          setSavedDatabases((prev) => [saved, ...prev]);
-          setDiaries(prev => {
-            const combined = [...prev, ...taggedDiaries];
-            const seen = new Set<string>();
-            return combined.filter(d => {
-              const key = `${(d.crNoAndSecOfLaw || '').trim().toLowerCase()}_${(d.policeStation || '').trim().toLowerCase()}_${(d.dateOfCd || '').trim().toLowerCase()}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-          });
-          setSelectedDiaryId(taggedDiaries[0]?.id || null);
-          setSaveDbStatus({ type: 'success', message: `Successfully imported "${dbName}"!` });
-          setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3000);
-        }
+        });
+
+        // Run 7-step validation pipeline
+        const report = validateAndPlanImport(text, fileType, allExistingDiaries);
+
+        setImportValidationReport(report);
+        setImportValidationDbName(rawDbName);
+        setShowImportValidationModal(true);
       } catch (err: any) {
-        console.error("Import database parse error:", err);
-        alert("Failed to import database file: " + err.message);
+        console.error("Import validation error:", err);
+        alert("Failed to process import file: " + err.message);
       } finally {
-        // Reset file input value so same file can be imported again if needed
         if (importFileInputRef.current) {
           importFileInputRef.current.value = '';
         }
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleConfirmValidatedImport = async () => {
+    if (!importValidationReport || !user) return;
+    const { validDiaries } = importValidationReport;
+
+    if (validDiaries.length === 0) {
+      alert('No valid records to import.');
+      setShowImportValidationModal(false);
+      return;
+    }
+
+    setIsImportingValidated(true);
+    try {
+      const dbName = importValidationDbName || 'Imported Database';
+
+      // Check for existing database with same name for conflict resolution
+      const existingDb = savedDatabases.find(db => db.name.toLowerCase() === dbName.toLowerCase());
+      if (existingDb) {
+        // Reuse existing conflict dialog
+        setShowImportValidationModal(false);
+        setImportConflictData({ dbName, diaries: validDiaries, existingDb });
+        return;
+      }
+
+      // No name conflict: import as new database
+      const generatedDbId = `db-${Date.now()}`;
+      const taggedDiaries = validDiaries.map(d => ({ ...d, dbId: generatedDbId }));
+      const startTime = Date.now();
+      const saved = await saveSavedDatabase(dbName, taggedDiaries, user.uid, generatedDbId);
+      setSavedDatabases(prev => {
+        const filtered = prev.filter(db => db.id !== saved.id);
+        return [saved, ...filtered];
+      });
+      setDiaries(prev => {
+        const combined = [...prev, ...taggedDiaries];
+        const seen = new Set<string>();
+        return combined.filter(d => {
+          const key = `${(d.policeStation || '').trim().toLowerCase()}|${(d.crNoAndSecOfLaw || '').trim().toLowerCase()}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      });
+      setSelectedDiaryId(taggedDiaries[0]?.id || null);
+
+      // Update the report with final imported count and time
+      setImportValidationReport(prev => prev ? {
+        ...prev,
+        imported: taggedDiaries.length,
+        timeTaken: prev.timeTaken + (Date.now() - startTime)
+      } : prev);
+
+      setSaveDbStatus({ type: 'success', message: `Successfully imported ${taggedDiaries.length} records as "${dbName}"!` });
+      setTimeout(() => setSaveDbStatus({ type: null, message: null }), 3500);
+      setShowImportValidationModal(false);
+    } catch (err: any) {
+      console.error("Confirmed import error:", err);
+      alert("Import failed: " + err.message);
+    } finally {
+      setIsImportingValidated(false);
+    }
   };
 
   const handleResolveConflictMerge = async () => {
@@ -3563,12 +3672,24 @@ export default function App() {
                         <div className="flex-1 overflow-y-auto flex flex-col gap-2 pr-1" style={{ maxHeight: 'min(300px, calc(100dvh - 280px))' }}>
                           {diaries
                             .filter(diary => {
-                              const q = searchQuery.toLowerCase().trim();
-                              if (!q) return true;
-                              return (diary.crNoAndSecOfLaw || '').toLowerCase().includes(q) ||
-                                     (diary.policeStation || '').toLowerCase().includes(q) ||
-                                     (diary.district || '').toLowerCase().includes(q) ||
-                                     (diary.dateOfCd || '').toLowerCase().includes(q);
+                              const raw = searchQuery.trim();
+                              if (!raw) return true;
+                              const keywords = raw.toLowerCase().split(/\s+/).filter(Boolean);
+                              const haystack = [
+                                diary.policeStation,
+                                diary.crNoAndSecOfLaw,
+                                diary.courtNameAndPlace,
+                                diary.attendedBy,
+                                diary.complainant,
+                                diary.stageOfTheCase,
+                                diary.remarks,
+                                diary.dateOfCd,
+                                diary.courtRefNo,
+                                diary.district,
+                                diary.dateOfReportTime,
+                                (diary.accusedList || []).map((a: any) => a.nameAndAddress).join(' ')
+                              ].join(' ').toLowerCase();
+                              return keywords.every(kw => haystack.includes(kw));
                             })
                             .map((diary) => {
                               const isSelected = selectedDiaryId === diary.id;
@@ -3614,12 +3735,24 @@ export default function App() {
                               );
                             })}
                           {diaries.filter(diary => {
-                            const q = searchQuery.toLowerCase().trim();
-                            if (!q) return true;
-                            return (diary.crNoAndSecOfLaw || '').toLowerCase().includes(q) ||
-                                   (diary.policeStation || '').toLowerCase().includes(q) ||
-                                   (diary.district || '').toLowerCase().includes(q) ||
-                                   (diary.dateOfCd || '').toLowerCase().includes(q);
+                            const raw = searchQuery.trim();
+                            if (!raw) return true;
+                            const keywords = raw.toLowerCase().split(/\s+/).filter(Boolean);
+                            const haystack = [
+                              diary.policeStation,
+                              diary.crNoAndSecOfLaw,
+                              diary.courtNameAndPlace,
+                              diary.attendedBy,
+                              diary.complainant,
+                              diary.stageOfTheCase,
+                              diary.remarks,
+                              diary.dateOfCd,
+                              diary.courtRefNo,
+                              diary.district,
+                              diary.dateOfReportTime,
+                              (diary.accusedList || []).map((a: any) => a.nameAndAddress).join(' ')
+                            ].join(' ').toLowerCase();
+                            return keywords.every(kw => haystack.includes(kw));
                           }).length === 0 && (
                             <p className="text-xs text-center py-4 italic" style={{ color: 'var(--th-text4)' }}>No matching cases.</p>
                           )}
@@ -4716,19 +4849,36 @@ export default function App() {
                               <p className="text-xs font-medium" style={{ color: 'var(--th-text3)' }}>Scan and clear redundant case diary records while preserving originals</p>
                             </div>
                           </div>
-                          {!isScanning && (
-                            <button
-                              onClick={runHealthScan}
-                              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-750 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              Scan Database
-                            </button>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {/* Sub-tab toggle */}
+                            <div className="flex items-center gap-1 p-1 rounded-xl border" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                              <button
+                                onClick={() => setHealthSubTab('scanner')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${healthSubTab === 'scanner' ? 'bg-rose-600 text-white shadow-xs' : 'text-gray-500 hover:text-gray-700'}`}
+                              >
+                                🔍 Scanner
+                              </button>
+                              <button
+                                onClick={() => { setHealthSubTab('backup_manager'); loadBackupManagerRecords(1); }}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${healthSubTab === 'backup_manager' ? 'bg-rose-600 text-white shadow-xs' : 'text-gray-500 hover:text-gray-700'}`}
+                              >
+                                🛡️ Backup Manager
+                              </button>
+                            </div>
+                            {healthSubTab === 'scanner' && !isScanning && (
+                              <button
+                                onClick={runHealthScan}
+                                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-750 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                Scan Database
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {/* Scanner Loading State */}
-                        {isScanning && (
+                        {healthSubTab === 'scanner' && isScanning && (
                           <div className="p-6 rounded-2xl border bg-gray-50/50 dark:bg-slate-900/40 border-gray-150 dark:border-slate-800 flex flex-col items-center justify-center gap-4 text-center">
                             <RefreshCw className="w-8 h-8 text-rose-600 animate-spin" />
                             <div className="space-y-1">
@@ -4752,8 +4902,26 @@ export default function App() {
                           </div>
                         )}
 
+                        {/* Scanner Unscanned State */}
+                        {healthSubTab === 'scanner' && healthStats.totalRecords === 0 && !isScanning && (
+                          <div className="p-12 text-center border rounded-3xl" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                            <HeartPulse className="w-12 h-12 text-rose-500 mx-auto mb-4 animate-pulse" />
+                            <h4 className="font-display font-bold text-sm" style={{ color: 'var(--th-text)' }}>Database Health Diagnostics</h4>
+                            <p className="text-xs text-gray-500 mt-2 max-w-sm mx-auto">
+                              Run a database scan to find duplicate entries, calculate health scores, and create duplicate safety backups.
+                            </p>
+                            <button
+                              onClick={runHealthScan}
+                              className="mt-4 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              Start Health Scan
+                            </button>
+                          </div>
+                        )}
+
                         {/* Scan Results Dashboard */}
-                        {healthStats.totalRecords > 0 && !isScanning && (
+                        {healthSubTab === 'scanner' && healthStats.totalRecords > 0 && !isScanning && (
                           <div className="space-y-6">
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                               <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
@@ -4813,148 +4981,97 @@ export default function App() {
                                     value={healthSearch}
                                     onChange={(e) => setHealthSearch(e.target.value)}
                                     className="w-full pl-9 pr-4 py-2 border rounded-xl text-xs focus:outline-none"
-                                    style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}
+                                    style={{
+                                      background: 'var(--th-input-bg)',
+                                      borderColor: 'var(--th-input-border)',
+                                      color: 'var(--th-text)'
+                                    }}
                                   />
                                 </div>
-                                <div className="flex gap-2 shrink-0">
-                                  <button onClick={() => {
-                                    const csv = "data:text/csv;charset=utf-8," + 
-                                      "Police Station,Crime Number,Duplicate Count,Record IDs,Created Dates\n" +
-                                      duplicateGroups.map(g => `"${g.policeStation}","${g.crimeNumber}",${g.totalCount},"${[g.originalRecord.id, ...g.duplicates.map(d => d.id)].join('; ')}","${[g.originalRecord.dateOfCd || '', ...g.duplicates.map(d => d.dateOfCd || '')].join('; ')}"`).join('\n');
-                                    const link = document.createElement("a");
-                                    link.href = encodeURI(csv);
-                                    link.download = `Health_Cleanup_Report_${Date.now()}.csv`;
-                                    link.click();
-                                  }} className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300 border border-emerald-200/50 hover:bg-emerald-100 text-[10px] font-bold py-1.5 px-3 rounded-lg cursor-pointer">
-                                    CSV
-                                  </button>
-                                  <button onClick={() => {
-                                    let html = "<html><head><meta charset='utf-8'></head><body><table>" +
-                                      "<tr><th>Police Station</th><th>Crime Number</th><th>Duplicate Count</th><th>Record IDs</th><th>Created Dates</th></tr>" +
-                                      duplicateGroups.map(g => `<tr><td>${g.policeStation}</td><td>${g.crimeNumber}</td><td>${g.totalCount}</td><td>${[g.originalRecord.id, ...g.duplicates.map(d => d.id)].join('; ')}</td><td>${[g.originalRecord.dateOfCd || '', ...g.duplicates.map(d => d.dateOfCd || '')].join('; ')}</td></tr>`).join('') +
-                                      "</table></body></html>";
-                                    const link = document.createElement("a");
-                                    link.href = URL.createObjectURL(new Blob([html], { type: 'application/vnd.ms-excel' }));
-                                    link.download = `Health_Cleanup_Report_${Date.now()}.xls`;
-                                    link.click();
-                                  }} className="bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-300 border border-blue-200/50 hover:bg-blue-100 text-[10px] font-bold py-1.5 px-3 rounded-lg cursor-pointer">
-                                    Excel
-                                  </button>
-                                  <button onClick={() => {
-                                    let text = `DATA HEALTH CLEANUP REPORT\nGenerated: ${new Date().toLocaleString()}\n\n`;
-                                    duplicateGroups.forEach((g, i) => {
-                                      text += `${i+1}. PS: ${g.policeStation} | Crime: ${g.crimeNumber} (Count: ${g.totalCount})\n`;
-                                      text += `   Original ID: ${g.originalRecord.id}\n`;
-                                      g.duplicates.forEach(d => { text += `   - Duplicate ID: ${d.id}\n`; });
-                                      text += '\n';
-                                    });
-                                    const link = document.createElement("a");
-                                    link.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-                                    link.download = `Health_Cleanup_Report_${Date.now()}.txt`;
-                                    link.click();
-                                  }} className="bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-300 border border-rose-200/50 hover:bg-rose-100 text-[10px] font-bold py-1.5 px-3 rounded-lg cursor-pointer">
-                                    PDF Report
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-gray-100 dark:border-slate-800">
-                                <div>
-                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Police Station</label>
-                                  <select value={healthStation} onChange={(e) => setHealthStation(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <select
+                                    value={healthStation}
+                                    onChange={(e) => setHealthStation(e.target.value)}
+                                    className="p-2 border rounded-xl text-xs bg-white dark:bg-slate-950 font-medium"
+                                  >
                                     <option value="all">All Stations</option>
-                                    {Array.from(new Set(duplicateGroups.map(g => g.policeStation).filter(Boolean))).map(st => (
-                                      <option key={st} value={st}>{st}</option>
+                                    {Array.from(new Set(duplicateGroups.map(g => g.policeStation))).map((st: any) => (
+                                      <option key={st} value={String(st).toLowerCase()}>{st}</option>
                                     ))}
                                   </select>
-                                </div>
-                                <div>
-                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Year</label>
-                                  <select value={healthYear} onChange={(e) => setHealthYear(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
+                                  <select
+                                    value={healthYear}
+                                    onChange={(e) => setHealthYear(e.target.value)}
+                                    className="p-2 border rounded-xl text-xs bg-white dark:bg-slate-950 font-medium"
+                                  >
                                     <option value="all">All Years</option>
-                                    {Array.from(new Set(duplicateGroups.map(g => g.crimeNumber.split('/')[1]).filter(Boolean))).map(yr => (
+                                    {Array.from(new Set(duplicateGroups.map(g => {
+                                      const parts = g.crimeNumber.split('/');
+                                      return parts[1] || '';
+                                    }).filter(Boolean))).map(yr => (
                                       <option key={yr} value={yr}>{yr}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <div>
-                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Court Name</label>
-                                  <select value={healthCourt} onChange={(e) => setHealthCourt(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
-                                    <option value="all">All Courts</option>
-                                    {Array.from(new Set(duplicateGroups.flatMap(g => [g.originalRecord.courtNameAndPlace, ...g.duplicates.map(d => d.courtNameAndPlace)]).filter(Boolean))).map(crt => (
-                                      <option key={crt} value={crt}>{crt}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <div>
-                                  <label className="block text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--th-text4)' }}>Investigating Officer</label>
-                                  <select value={healthOfficer} onChange={(e) => setHealthOfficer(e.target.value)} className="w-full p-1.5 border rounded-lg text-xs" style={{ background: 'var(--th-input-bg)', borderColor: 'var(--th-input-border)', color: 'var(--th-text)' }}>
-                                    <option value="all">All Officers</option>
-                                    {Array.from(new Set(duplicateGroups.flatMap(g => [g.originalRecord.attendedBy, ...g.duplicates.map(d => d.attendedBy)]).filter(Boolean))).map(off => (
-                                      <option key={off} value={off}>{off}</option>
                                     ))}
                                   </select>
                                 </div>
                               </div>
                             </div>
 
-                            {/* Bulk Removal Button */}
-                            {filteredGroups.length > 0 && (
-                              <div className="flex justify-end pt-2">
-                                <button
-                                  onClick={handleBulkRemoveAll}
-                                  className="w-full sm:w-auto px-5 py-3 bg-rose-600 hover:bg-rose-750 text-white rounded-xl text-xs font-bold transition-all shadow flex items-center justify-center gap-2 cursor-pointer"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                  Remove All Safe Duplicates
-                                </button>
+                            {/* Duplicate Groups List */}
+                            <div className="border rounded-2xl overflow-hidden" style={{ borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}>
+                              <div className="p-3 border-b flex justify-between items-center text-xs" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                <span className="font-bold">Duplicate Records Scanner</span>
+                                {filteredGroups.length > 0 && (
+                                  <button
+                                    onClick={handleBulkRemoveAll}
+                                    className="p-1 px-3 bg-rose-600 hover:bg-rose-750 text-white rounded-lg font-bold text-[10px] cursor-pointer"
+                                  >
+                                    Clear All Duplicates
+                                  </button>
+                                )}
                               </div>
-                            )}
 
-                            {/* Duplicates Table */}
-                            <div className="border rounded-2xl overflow-hidden shadow-xs" style={{ borderColor: 'var(--th-border)' }}>
                               <div className="overflow-x-auto">
                                 <table className="w-full text-left text-xs border-collapse">
                                   <thead>
-                                    <tr style={{ background: 'var(--th-surface2)', borderBottom: '1px solid var(--th-border)' }}>
-                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Police Station</th>
-                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Crime Number</th>
-                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Duplicate Count</th>
-                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Oldest Date</th>
-                                      <th className="p-3.5 font-bold uppercase text-[9px]" style={{ color: 'var(--th-text3)' }}>Last Updated</th>
-                                      <th className="p-3.5 font-bold uppercase text-[9px] text-right" style={{ color: 'var(--th-text3)' }}>Action</th>
+                                    <tr className="border-b" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                      <th className="p-3 font-bold text-[9px] uppercase">Police Station</th>
+                                      <th className="p-3 font-bold text-[9px] uppercase">Crime Number</th>
+                                      <th className="p-3 font-bold text-[9px] uppercase">Duplicates Count</th>
+                                      <th className="p-3 font-bold text-[9px] uppercase">Created (Oldest)</th>
+                                      <th className="p-3 font-bold text-[9px] uppercase">Last Updated</th>
+                                      <th className="p-3 font-bold text-[9px] uppercase text-right">Actions</th>
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {filteredGroups.length === 0 ? (
                                       <tr>
-                                        <td colSpan={6} className="p-8 text-center italic text-gray-500">No duplicates found matching filters.</td>
+                                        <td colSpan={6} className="p-8 text-center text-xs italic text-gray-400">
+                                          No duplicate records detected. Your databases are healthy!
+                                        </td>
                                       </tr>
                                     ) : (
                                       filteredGroups.map((g) => {
                                         const isExpanded = expandedGroupKeys.has(g.id);
                                         return (
                                           <React.Fragment key={g.id}>
-                                            <tr
-                                              onClick={() => {
-                                                const nextKeys = new Set(expandedGroupKeys);
-                                                if (isExpanded) nextKeys.delete(g.id);
-                                                else nextKeys.add(g.id);
-                                                setExpandedGroupKeys(nextKeys);
-                                              }}
-                                              className="border-b border-gray-150/40 dark:border-slate-800 hover:bg-gray-50/50 dark:hover:bg-slate-900/30 cursor-pointer"
-                                              style={{ background: 'var(--th-card-bg)' }}
-                                            >
-                                              <td className="p-3.5 font-semibold" style={{ color: 'var(--th-text)' }}>{g.policeStation}</td>
-                                              <td className="p-3.5 font-mono font-bold text-gray-900 dark:text-gray-100">{g.crimeNumber}</td>
-                                              <td className="p-3.5">
-                                                <span className="px-2 py-0.5 font-bold rounded-full text-[10px] bg-red-100 text-red-700">
-                                                  {g.totalCount} entries
-                                                </span>
-                                              </td>
-                                              <td className="p-3.5" style={{ color: 'var(--th-text3)' }}>{g.createdDate}</td>
-                                              <td className="p-3.5" style={{ color: 'var(--th-text3)' }}>{g.lastUpdated}</td>
-                                              <td className="p-3.5 text-right flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                                            <tr className="border-b hover:bg-slate-50/40 dark:hover:bg-slate-900/40" style={{ borderColor: 'var(--th-border)' }}>
+                                              <td className="p-3 font-semibold">{g.policeStation}</td>
+                                              <td className="p-3 font-bold text-gray-750 dark:text-gray-250">{g.crimeNumber}</td>
+                                              <td className="p-3 font-mono">{g.totalCount} records ({g.duplicates.length} to delete)</td>
+                                              <td className="p-3 text-gray-400 font-mono">{g.createdDate}</td>
+                                              <td className="p-3 font-medium text-emerald-600 font-mono">{g.lastUpdated}</td>
+                                              <td className="p-3 text-right space-x-1.5 whitespace-nowrap">
+                                                <button
+                                                  onClick={() => {
+                                                    const nextKeys = new Set(expandedGroupKeys);
+                                                    if (isExpanded) nextKeys.delete(g.id);
+                                                    else nextKeys.add(g.id);
+                                                    setExpandedGroupKeys(nextKeys);
+                                                  }}
+                                                  className="p-1 px-2 border hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg font-bold text-[10px] cursor-pointer"
+                                                >
+                                                  {isExpanded ? 'Hide' : 'Details'}
+                                                </button>
                                                 <button
                                                   onClick={() => setSelectedGroupForCompare(g)}
                                                   className="p-1 px-2 border hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg font-bold text-[10px] cursor-pointer"
@@ -4990,7 +5107,7 @@ export default function App() {
                                                         {[g.originalRecord, ...g.duplicates].map((rec, idx) => (
                                                           <tr key={rec.id} className="border-b border-gray-100 last:border-0">
                                                             <td className="p-2.5 font-mono text-[9.5px] truncate max-w-[120px]" title={rec.id}>
-                                                              {rec.id} {idx === 0 && <span className="ml-1 px-1 bg-green-100 text-green-700 font-bold rounded text-[8px]">ORIGINAL (OLDEST)</span>}
+                                                              {rec.id} {idx === 0 && <span className="ml-1 px-1 bg-green-100 text-green-700 font-bold rounded text-[8px]">ORIGINAL (NEWEST)</span>}
                                                             </td>
                                                             <td className="p-2.5">{rec.dateOfCd}</td>
                                                             <td className="p-2.5 font-semibold">{rec.attendedBy || 'N/A'}</td>
@@ -5024,7 +5141,198 @@ export default function App() {
                               <div className="space-y-3">
                                 <h4 className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: 'var(--th-text2)' }}>
                                   <History className="w-4 h-4 text-emerald-600" />
-                                  Safety Restore Registry
+                                  Safety Restore Registry (Pre-cleanup snapshots)
+                                </h4>
+                                <div className="border rounded-2xl overflow-hidden max-h-[220px] overflow-y-auto" style={{ borderColor: 'var(--th-border)' }}>
+                                  {backupsList.length === 0 ? (
+                                    <p className="p-6 text-center text-xs italic text-gray-400">No backup records configured.</p>
+                                  ) : (
+                                    backupsList.map(bk => (
+                                      <div key={bk.id} className="p-3 border-b border-gray-100 last:border-0 flex items-center justify-between text-[11px]" style={{ background: 'var(--th-surface)' }}>
+                                        <div className="space-y-0.5 min-w-0 pr-2">
+                                          <p className="font-bold truncate text-gray-800 dark:text-gray-200">{bk.description}</p>
+                                          <p className="text-[9.5px] text-gray-400 font-mono">By: {bk.adminEmail} | {new Date(bk.timestamp).toLocaleString()}</p>
+                                        </div>
+                                        <button
+                                          onClick={() => handleRestoreBackup(bk.id)}
+                                          className="p-1 px-2.5 bg-emerald-600 hover:bg-emerald-750 text-white rounded-lg font-bold text-[10px] shrink-0 cursor-pointer"
+                                        >
+                                          Restore
+                                        </button>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Admin Action Audit Trails */}
+                              <div className="space-y-3">
+                                <h4 className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: 'var(--th-text2)' }}>
+                                  <Terminal className="w-4 h-4 text-indigo-650" />
+                                  Action Audit Trails
+                                </h4>
+                                <div className="border rounded-2xl overflow-hidden max-h-[220px] overflow-y-auto" style={{ borderColor: 'var(--th-border)' }}>
+                                  {auditLogsList.length === 0 ? (
+                                    <p className="p-6 text-center text-xs italic text-gray-400">No audit log entries recorded yet.</p>
+                                  ) : (
+                                    auditLogsList.map(ad => (
+                                      <div key={ad.id} className="p-3 border-b border-gray-100 last:border-0 text-[10.5px] leading-relaxed" style={{ background: 'var(--th-surface)', color: 'var(--th-text3)' }}>
+                                        <span className="font-semibold text-gray-900 dark:text-gray-100">{ad.action}</span>
+                                        <div className="flex flex-wrap gap-x-2 text-[9px] text-gray-400 font-mono mt-0.5">
+                                          <span>User: {ad.adminEmail}</span>
+                                          <span>IP: {ad.ipAddress}</span>
+                                          <span>Time: {new Date(ad.timestamp).toLocaleTimeString()}</span>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Backup Manager Dashboard Tab */}
+                        {healthSubTab === 'backup_manager' && (
+                          <div className="space-y-6">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Total Backups</p>
+                                <p className="text-xl font-display font-bold text-indigo-600 mt-0.5">{backupManagerTotal}</p>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Safety Snapshots</p>
+                                <p className="text-xl font-display font-bold text-emerald-600 mt-0.5">{backupsList.length}</p>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Duplicate Backups</p>
+                                <p className="text-xl font-display font-bold text-amber-600 mt-0.5">{backupManagerTotal}</p>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 border border-gray-250/40 dark:border-slate-800 rounded-2xl shadow-sm text-center">
+                                <p className="text-[9px] font-bold uppercase" style={{ color: 'var(--th-text4)' }}>Restore Guard</p>
+                                <p className="text-xs font-bold text-green-600 mt-2.5">Active</p>
+                              </div>
+                            </div>
+
+                            <div className="p-4 bg-slate-50 dark:bg-slate-900/60 border border-gray-200 dark:border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                              <div className="space-y-0.5">
+                                <h4 className="text-xs font-bold" style={{ color: 'var(--th-text)' }}>Target Database for Restores</h4>
+                                <p className="text-[10px] text-gray-500">Select which database to push recovered duplicate records into</p>
+                              </div>
+                              <select
+                                value={restoreTargetDbId}
+                                onChange={(e) => setRestoreTargetDbId(e.target.value)}
+                                className="p-2 border rounded-xl text-xs font-medium focus:outline-none max-w-xs bg-white dark:bg-slate-950"
+                                style={{ borderColor: 'var(--th-border)', color: 'var(--th-text)' }}
+                              >
+                                <option value="">-- Choose Target Database --</option>
+                                {savedDatabases.filter(db => !db.id.startsWith('__')).map(db => (
+                                  <option key={db.id} value={db.id}>{db.name} ({db.diaries?.length || 0} cases)</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div className="border rounded-2xl overflow-hidden" style={{ borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}>
+                              <div className="p-3 border-b font-bold text-xs" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)', color: 'var(--th-text2)' }}>
+                                Deleted Duplicates Backup Table (case_diary_duplicate_backup)
+                              </div>
+                              {isLoadingBackupManager ? (
+                                <p className="p-8 text-center text-xs italic text-gray-400">Loading backup records...</p>
+                              ) : backupManagerError ? (
+                                <p className="p-8 text-center text-xs text-rose-500 font-semibold">{backupManagerError}</p>
+                              ) : backupManagerRecords.length === 0 ? (
+                                <p className="p-8 text-center text-xs italic text-gray-400">No deleted duplicate records found in backup storage.</p>
+                              ) : (
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left text-xs border-collapse">
+                                    <thead>
+                                      <tr className="border-b" style={{ background: 'var(--th-surface2)', borderColor: 'var(--th-border)' }}>
+                                        <th className="p-3 font-bold text-[9px] uppercase">Backup ID</th>
+                                        <th className="p-3 font-bold text-[9px] uppercase">Backup Date</th>
+                                        <th className="p-3 font-bold text-[9px] uppercase">Deleted By</th>
+                                        <th className="p-3 font-bold text-[9px] uppercase">Police Station</th>
+                                        <th className="p-3 font-bold text-[9px] uppercase">Crime Number</th>
+                                        <th className="p-3 font-bold text-[9px] uppercase">Original Record ID</th>
+                                        <th className="p-3 font-bold text-[9px] uppercase">Reason</th>
+                                        <th className="p-3 font-bold text-[9px] uppercase text-right">Actions</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {backupManagerRecords.map(rec => {
+                                        const original = typeof rec.original_record === 'string'
+                                          ? JSON.parse(rec.original_record)
+                                          : rec.original_record || {};
+                                        return (
+                                          <tr key={rec.id} className="border-b hover:bg-slate-50/40 dark:hover:bg-slate-900/40" style={{ borderColor: 'var(--th-border)' }}>
+                                            <td className="p-3 font-mono text-[9px]">{rec.id}</td>
+                                            <td className="p-3 whitespace-nowrap">{BackupManagerService.formatBackupDate(rec.backup_timestamp)}</td>
+                                            <td className="p-3 font-semibold text-gray-700 dark:text-gray-300">{rec.deleted_by}</td>
+                                            <td className="p-3">{original.policeStation || 'N/A'}</td>
+                                            <td className="p-3 font-bold">{original.crNoAndSecOfLaw || 'N/A'}</td>
+                                            <td className="p-3 font-mono text-[9px]">{rec.original_record_id}</td>
+                                            <td className="p-3 text-gray-500 max-w-xs truncate" title={rec.delete_reason}>{rec.delete_reason}</td>
+                                            <td className="p-3 text-right space-x-1.5 whitespace-nowrap">
+                                              <button
+                                                onClick={() => alert(`Original Case Record JSON:\n\n${JSON.stringify(original, null, 2)}`)}
+                                                className="p-1 px-2 border hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg font-bold text-[10px] cursor-pointer"
+                                              >
+                                                View
+                                              </button>
+                                              <button
+                                                onClick={() => handleRestoreBackupRecord(rec)}
+                                                disabled={!restoreTargetDbId}
+                                                className={`p-1 px-2 bg-emerald-600 hover:bg-emerald-750 text-white rounded-lg font-bold text-[10px] cursor-pointer ${!restoreTargetDbId ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                                title={!restoreTargetDbId ? 'Select a target database first' : ''}
+                                              >
+                                                Restore
+                                              </button>
+                                              <button
+                                                onClick={() => handleDeleteBackupRecord(rec.id)}
+                                                className="p-1 px-2 bg-transparent hover:bg-red-50 text-red-500 hover:text-red-700 rounded-lg font-bold text-[10px] cursor-pointer"
+                                              >
+                                                Delete
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Pagination controls */}
+                            {backupManagerTotal > 50 && (
+                              <div className="flex justify-between items-center text-xs">
+                                <span className="text-gray-500 font-medium">Showing {backupManagerRecords.length} of {backupManagerTotal} records</span>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => loadBackupManagerRecords(backupManagerPage - 1)}
+                                    disabled={backupManagerPage === 1}
+                                    className="p-1 px-2.5 border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                                  >
+                                    Previous
+                                  </button>
+                                  <span className="font-bold px-2">Page {backupManagerPage}</span>
+                                  <button
+                                    onClick={() => loadBackupManagerRecords(backupManagerPage + 1)}
+                                    disabled={backupManagerPage * 50 >= backupManagerTotal}
+                                    className="p-1 px-2.5 border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                                  >
+                                    Next
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Legacy safety restore backups section */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-gray-150 dark:border-slate-800">
+                              {/* Safety Restore Backups */}
+                              <div className="space-y-3">
+                                <h4 className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: 'var(--th-text2)' }}>
+                                  <History className="w-4 h-4 text-emerald-600" />
+                                  Safety Restore Registry (Pre-cleanup snapshots)
                                 </h4>
                                 <div className="border rounded-2xl overflow-hidden max-h-[220px] overflow-y-auto" style={{ borderColor: 'var(--th-border)' }}>
                                   {backupsList.length === 0 ? (
@@ -5237,6 +5545,137 @@ export default function App() {
               >
                 Remove Duplicates
               </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Import Validation Report Modal */}
+      {showImportValidationModal && importValidationReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md bg-black/40">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="w-full max-w-2xl rounded-3xl p-6 shadow-2xl border flex flex-col gap-4 max-h-[85vh] overflow-y-auto"
+            style={{ background: 'var(--th-card-bg)', borderColor: 'var(--th-card-border)' }}
+          >
+            <div className="flex items-start justify-between border-b pb-3" style={{ borderColor: 'var(--th-border)' }}>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-650 animate-pulse" />
+                <h3 className="font-display font-bold text-base" style={{ color: 'var(--th-text)' }}>
+                  File Import Validation Report
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowImportValidationModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-xs font-bold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Validation summary metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="p-3 bg-slate-50 dark:bg-slate-900 border rounded-xl text-center" style={{ borderColor: 'var(--th-border)' }}>
+                <span className="text-[9px] font-bold uppercase text-gray-500">Total Records</span>
+                <p className="text-lg font-bold mt-0.5" style={{ color: 'var(--th-text)' }}>{importValidationReport.totalRecords}</p>
+              </div>
+              <div className="p-3 bg-green-50 dark:bg-green-950/20 border border-green-150/40 rounded-xl text-center">
+                <span className="text-[9px] font-bold uppercase text-green-600">Valid Records</span>
+                <p className="text-lg font-bold text-green-700 mt-0.5">{importValidationReport.validRecords}</p>
+              </div>
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-150/40 rounded-xl text-center">
+                <span className="text-[9px] font-bold uppercase text-amber-600">Skipped (Dup)</span>
+                <p className="text-lg font-bold text-amber-700 mt-0.5">{importValidationReport.skippedCount}</p>
+              </div>
+              <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-150/40 rounded-xl text-center">
+                <span className="text-[9px] font-bold uppercase text-red-600">Invalid Records</span>
+                <p className="text-lg font-bold text-red-700 mt-0.5">{importValidationReport.invalidRecords}</p>
+              </div>
+            </div>
+
+            {/* Detailed counters grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-slate-50 dark:bg-slate-900/60 rounded-2xl text-[10px] font-semibold" style={{ color: 'var(--th-text3)' }}>
+              <div className="flex justify-between border-b sm:border-b-0 sm:border-r border-gray-200/50 pr-2" style={{ borderColor: 'var(--th-border)' }}>
+                <span>Duplicates In File:</span>
+                <span className="font-bold text-amber-600">{importValidationReport.skippedDuplicateInFile}</span>
+              </div>
+              <div className="flex justify-between border-b sm:border-b-0 sm:border-r border-gray-200/50 px-2" style={{ borderColor: 'var(--th-border)' }}>
+                <span>Duplicates In DB:</span>
+                <span className="font-bold text-amber-600">{importValidationReport.skippedDuplicateInDatabase}</span>
+              </div>
+              <div className="flex justify-between pl-2">
+                <span>Time Taken:</span>
+                <span className="font-bold text-indigo-650">{importValidationReport.timeTaken} ms</span>
+              </div>
+            </div>
+
+            {/* Validation Warnings / Details List */}
+            {(importValidationReport.skippedFileDetails.length > 0 ||
+              importValidationReport.skippedDatabaseDetails.length > 0 ||
+              importValidationReport.invalidDetails.length > 0) && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">Validation Details</h4>
+                <div className="border rounded-2xl max-h-[220px] overflow-y-auto divide-y text-[10.5px] leading-relaxed" style={{ borderColor: 'var(--th-border)', background: 'var(--th-surface)' }}>
+                  
+                  {/* Invalid details */}
+                  {importValidationReport.invalidDetails.map((inv, idx) => (
+                    <div key={`inv-${idx}`} className="p-2.5 bg-red-500/5 text-red-700 dark:text-red-400">
+                      <strong>Row {inv.rowIndex}:</strong> Missing required fields: <span className="font-bold">{inv.missingFields.join(', ')}</span>.
+                    </div>
+                  ))}
+
+                  {/* Skipped in File details */}
+                  {importValidationReport.skippedFileDetails.map((sk, idx) => (
+                    <div key={`sk-file-${idx}`} className="p-2.5 bg-amber-500/5 text-amber-700 dark:text-amber-400">
+                      <strong>Skipped Duplicate in File:</strong> PS: {sk.policeStation} | Crime: {sk.crimeNumber} — {sk.reason}
+                    </div>
+                  ))}
+
+                  {/* Skipped in DB details */}
+                  {importValidationReport.skippedDatabaseDetails.map((sk, idx) => (
+                    <div key={`sk-db-${idx}`} className="p-2.5 bg-amber-500/5 text-amber-700 dark:text-amber-400">
+                      <strong>Skipped Duplicate in Database:</strong> PS: {sk.policeStation} | Crime: {sk.crimeNumber} (Existing ID: <span className="font-mono text-[9.5px]">{sk.existingRecordId}</span>) — {sk.reason}
+                    </div>
+                  ))}
+
+                </div>
+              </div>
+            )}
+
+            {/* Confirmation actions */}
+            <div className="border-t pt-3 flex flex-col sm:flex-row justify-between items-center gap-3" style={{ borderColor: 'var(--th-border)' }}>
+              <div className="w-full sm:w-auto relative">
+                <label className="block text-[8px] font-bold uppercase tracking-wider mb-0.5 text-gray-400">Import Database Name</label>
+                <input
+                  type="text"
+                  value={importValidationDbName}
+                  onChange={(e) => setImportValidationDbName(e.target.value)}
+                  className="p-2 border rounded-xl text-xs font-semibold focus:outline-none w-full sm:w-60 bg-white dark:bg-slate-950"
+                  style={{ borderColor: 'var(--th-border)', color: 'var(--th-text)' }}
+                  placeholder="Database Name"
+                />
+              </div>
+              <div className="flex gap-2.5 w-full sm:w-auto justify-end">
+                <button
+                  onClick={() => setShowImportValidationModal(false)}
+                  className="px-4 py-2.5 border rounded-xl text-xs font-bold hover:bg-gray-50 cursor-pointer"
+                  style={{ color: 'var(--th-text2)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmValidatedImport}
+                  disabled={importValidationReport.validDiaries.length === 0 || isImportingValidated}
+                  className={`px-5 py-2.5 bg-emerald-600 hover:bg-emerald-750 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs flex items-center gap-1.5 ${
+                    (importValidationReport.validDiaries.length === 0 || isImportingValidated) ? 'opacity-40 cursor-not-allowed' : ''
+                  }`}
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  {isImportingValidated ? 'Importing...' : `Import ${importValidationReport.validDiaries.length} Valid Records`}
+                </button>
+              </div>
             </div>
           </motion.div>
         </div>

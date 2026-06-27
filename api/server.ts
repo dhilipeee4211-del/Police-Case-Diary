@@ -1031,9 +1031,23 @@ CREATE TABLE IF NOT EXISTS database_access (
   PRIMARY KEY (email, db_id)
 );
 
--- Enable Row Level Security (RLS) on both tables
+-- Create the case_diary_duplicate_backup table
+CREATE TABLE IF NOT EXISTS case_diary_duplicate_backup (
+  id TEXT PRIMARY KEY,
+  original_record_id TEXT NOT NULL,
+  original_record JSONB NOT NULL,
+  backup_timestamp BIGINT NOT NULL,
+  deleted_by TEXT NOT NULL,
+  delete_reason TEXT NOT NULL,
+  cleanup_session_id TEXT NOT NULL,
+  original_created_date TEXT,
+  original_updated_date TEXT
+);
+
+-- Enable Row Level Security (RLS) on all tables
 ALTER TABLE case_databases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE database_access ENABLE ROW LEVEL SECURITY;
+ALTER TABLE case_diary_duplicate_backup ENABLE ROW LEVEL SECURITY;
 
 -- Create policies for case_databases
 CREATE POLICY "Allow select for user" ON case_databases FOR SELECT USING (true);
@@ -1046,6 +1060,11 @@ CREATE POLICY "Allow select for all" ON database_access FOR SELECT USING (true);
 CREATE POLICY "Allow insert for all" ON database_access FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow update for all" ON database_access FOR UPDATE USING (true);
 CREATE POLICY "Allow delete for all" ON database_access FOR DELETE USING (true);
+
+-- Create policies for case_diary_duplicate_backup
+CREATE POLICY "Allow select for backup" ON case_diary_duplicate_backup FOR SELECT USING (true);
+CREATE POLICY "Allow insert for backup" ON case_diary_duplicate_backup FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow delete for backup" ON case_diary_duplicate_backup FOR DELETE USING (true);
 `;
 
     let connectionTest = false;
@@ -1454,7 +1473,267 @@ app.post('/api/db/delete', async (req, res) => {
 });
 
 
+// ─── Health Backup Manager APIs ───────────────────────────────────────────────
+
+// Endpoint: List all records from case_diary_duplicate_backup table
+app.post('/api/health/backup/list', async (req, res) => {
+  try {
+    if (!supabaseServerClient) {
+      return res.status(503).json({ error: 'Supabase not configured.' });
+    }
+    const { page = 1, pageSize = 50 } = req.body || {};
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data, error, count } = await supabaseServerClient
+      .from('case_diary_duplicate_backup')
+      .select('*', { count: 'exact' })
+      .order('backup_timestamp', { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+    return res.json({ success: true, records: data || [], total: count || 0, page, pageSize });
+  } catch (err: any) {
+    console.error('Error in /api/health/backup/list:', err);
+    return res.status(500).json({ error: err.message || 'Failed to list backups' });
+  }
+});
+
+// Endpoint: Permanently delete a backup record
+app.post('/api/health/backup/delete', async (req, res) => {
+  try {
+    if (!supabaseServerClient) {
+      return res.status(503).json({ error: 'Supabase not configured.' });
+    }
+    const { id } = req.body || {};
+    if (!id) return res.status(400).json({ error: 'Missing backup record id' });
+
+    const { error } = await supabaseServerClient
+      .from('case_diary_duplicate_backup')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    console.log(`Permanently deleted backup record: ${id}`);
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error('Error in /api/health/backup/delete:', err);
+    return res.status(500).json({ error: err.message || 'Failed to delete backup' });
+  }
+});
+
+// Endpoint: Restore a backup record into the main case_databases table
+// Only restores if it would not create a duplicate (same policeStation + crimeNumber already exists)
+app.post('/api/health/backup/restore', async (req, res) => {
+  try {
+    if (!supabaseServerClient) {
+      return res.status(503).json({ error: 'Supabase not configured.' });
+    }
+    const { id, targetDbId } = req.body || {};
+    if (!id || !targetDbId) {
+      return res.status(400).json({ error: 'Missing id or targetDbId' });
+    }
+
+    // 1. Fetch the backup record
+    const { data: backupRow, error: fetchErr } = await supabaseServerClient
+      .from('case_diary_duplicate_backup')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!backupRow) return res.status(404).json({ error: 'Backup record not found' });
+
+    const record = typeof backupRow.original_record === 'string'
+      ? JSON.parse(backupRow.original_record)
+      : backupRow.original_record;
+
+    const policeStation = (record.policeStation || '').trim().toLowerCase();
+    const crimeNo = (record.crNoAndSecOfLaw || '').trim().toLowerCase();
+
+    // 2. Fetch target database diaries
+    const { data: targetDb, error: dbErr } = await supabaseServerClient
+      .from('case_databases')
+      .select('diaries')
+      .eq('id', targetDbId)
+      .maybeSingle();
+
+    if (dbErr) throw dbErr;
+    if (!targetDb) return res.status(404).json({ error: 'Target database not found' });
+
+    const currentDiaries = Array.isArray(targetDb.diaries) ? targetDb.diaries : [];
+
+    // 3. Duplicate guard: check if police station + crime number already exists
+    const alreadyExists = currentDiaries.some((d: any) => {
+      const stn = (d.policeStation || '').trim().toLowerCase();
+      const cr = (d.crNoAndSecOfLaw || '').trim().toLowerCase();
+      return stn === policeStation && cr === crimeNo;
+    });
+
+    if (alreadyExists) {
+      return res.json({
+        success: false,
+        reason: 'duplicate',
+        message: `Record for ${record.policeStation} / ${record.crNoAndSecOfLaw} already exists in the target database. Restore aborted to prevent duplicate.`
+      });
+    }
+
+    // 4. Append the record and update the target database
+    const restoredRecord = { ...record, dbId: targetDbId };
+    const updatedDiaries = [...currentDiaries, restoredRecord];
+
+    const { error: updateErr } = await supabaseServerClient
+      .from('case_databases')
+      .update({ diaries: updatedDiaries })
+      .eq('id', targetDbId);
+
+    if (updateErr) throw updateErr;
+
+    console.log(`Restored backup record ${id} → database ${targetDbId}`);
+    return res.json({ success: true, message: 'Record restored successfully.' });
+  } catch (err: any) {
+    console.error('Error in /api/health/backup/restore:', err);
+    return res.status(500).json({ error: err.message || 'Failed to restore backup' });
+  }
+});
+
+// Endpoint: Transaction-safe duplicate cleanup
+// 1. Backup duplicates into case_diary_duplicate_backup
+// 2. Verify backup succeeded
+// 3. Remove duplicates from case_databases
+// 4. Verify deletion
+// 5. Rollback if any step fails
+app.post('/api/health/cleanup', async (req, res) => {
+  if (!supabaseServerClient) {
+    return res.status(503).json({ error: 'Supabase not configured.' });
+  }
+
+  const { groups, adminEmail } = req.body || {};
+  if (!groups || !Array.isArray(groups) || groups.length === 0) {
+    return res.status(400).json({ error: 'No groups provided for cleanup' });
+  }
+
+  const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+  const backupTimestamp = Date.now();
+  const backedUpIds: string[] = [];
+  const deletedCounts: Record<string, number> = {};
+
+  try {
+    // ── Phase A: Backup all duplicates ────────────────────────────────────────
+    console.log(`[Cleanup ${sessionId}] Phase A: Backing up ${groups.length} groups...`);
+
+    for (const group of groups) {
+      for (const dup of (group.duplicates || [])) {
+        const backupId = `dup-backup-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        const { error: backupInsertErr } = await supabaseServerClient
+          .from('case_diary_duplicate_backup')
+          .insert({
+            id: backupId,
+            original_record_id: dup.id,
+            original_record: JSON.stringify(dup),
+            backup_timestamp: backupTimestamp,
+            deleted_by: adminEmail || 'admin',
+            delete_reason: `Duplicate of ${group.originalRecord?.id} for PS: ${group.policeStation} CR: ${group.crimeNumber}`,
+            cleanup_session_id: sessionId,
+            original_created_date: dup.dateOfCd || dup.dateOfReportTime || '',
+            original_updated_date: (dup as any).updated_at || (dup as any).updatedAt || ''
+          });
+
+        if (backupInsertErr) {
+          throw new Error(`Backup insert failed for record ${dup.id}: ${backupInsertErr.message}`);
+        }
+        backedUpIds.push(backupId);
+      }
+    }
+
+    // ── Phase B: Verify backups exist ──────────────────────────────────────────
+    console.log(`[Cleanup ${sessionId}] Phase B: Verifying ${backedUpIds.length} backups...`);
+    const { count: verifyCount, error: verifyErr } = await supabaseServerClient
+      .from('case_diary_duplicate_backup')
+      .select('id', { count: 'exact', head: true })
+      .eq('cleanup_session_id', sessionId);
+
+    if (verifyErr) throw new Error(`Backup verification failed: ${verifyErr.message}`);
+    if ((verifyCount || 0) < backedUpIds.length) {
+      throw new Error(`Backup verification mismatch. Expected ${backedUpIds.length}, found ${verifyCount}`);
+    }
+
+    // ── Phase C: Remove duplicates from databases ──────────────────────────────
+    console.log(`[Cleanup ${sessionId}] Phase C: Deleting duplicates from databases...`);
+
+    // Collect all duplicate IDs to delete grouped by dbId
+    const deleteByDbId = new Map<string, Set<string>>();
+    for (const group of groups) {
+      for (const dup of (group.duplicates || [])) {
+        const dbId = dup.dbId || '';
+        if (!deleteByDbId.has(dbId)) deleteByDbId.set(dbId, new Set());
+        deleteByDbId.get(dbId)!.add(dup.id);
+      }
+    }
+
+    // Track original states for rollback
+    const originalDiariesSnapshot = new Map<string, any[]>();
+
+    for (const [dbId, idsToRemove] of deleteByDbId.entries()) {
+      const { data: dbRow, error: fetchErr } = await supabaseServerClient
+        .from('case_databases')
+        .select('diaries')
+        .eq('id', dbId)
+        .maybeSingle();
+
+      if (fetchErr) throw new Error(`Fetch database ${dbId} failed: ${fetchErr.message}`);
+      if (!dbRow) continue;
+
+      const current: any[] = Array.isArray(dbRow.diaries) ? dbRow.diaries : [];
+      originalDiariesSnapshot.set(dbId, current);
+
+      const filtered = current.filter((d: any) => !idsToRemove.has(d.id));
+      deletedCounts[dbId] = current.length - filtered.length;
+
+      const { error: updateErr } = await supabaseServerClient
+        .from('case_databases')
+        .update({ diaries: filtered })
+        .eq('id', dbId);
+
+      if (updateErr) {
+        throw new Error(`Delete update failed for database ${dbId}: ${updateErr.message}`);
+      }
+    }
+
+    const totalDeleted = Object.values(deletedCounts).reduce((a, b) => a + b, 0);
+    console.log(`[Cleanup ${sessionId}] ✅ Complete. Deleted ${totalDeleted} duplicates. Backups: ${backedUpIds.length}.`);
+
+    return res.json({
+      success: true,
+      sessionId,
+      totalDeleted,
+      backedUpCount: backedUpIds.length,
+      backupIds: backedUpIds
+    });
+
+  } catch (err: any) {
+    console.error(`[Cleanup ${sessionId}] ❌ ERROR: ${err.message}. Rolling back backups...`);
+
+    // Rollback: delete all backup records we inserted this session
+    if (backedUpIds.length > 0) {
+      try {
+        await supabaseServerClient
+          .from('case_diary_duplicate_backup')
+          .delete()
+          .eq('cleanup_session_id', sessionId);
+        console.log(`[Cleanup ${sessionId}] Rollback: Removed ${backedUpIds.length} backup records.`);
+      } catch (rollbackErr: any) {
+        console.error(`[Cleanup ${sessionId}] CRITICAL: Rollback failed:`, rollbackErr.message);
+      }
+    }
+
+    return res.status(500).json({ error: err.message || 'Cleanup transaction failed', sessionId });
+  }
+});
+
+
 // Error handling middleware for clean JSON errors instead of HTML fallback
+
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Express global error handler:', err);
   res.status(err.status || 500).json({
