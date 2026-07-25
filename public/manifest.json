@@ -1,0 +1,25 @@
+{
+  "name": "AI Case Diary Reconstruction Workspace",
+  "short_name": "Case Diary",
+  "description": "Premium AI Case Diary Reconstruction Workspace - Reconstruct and format scanned Case Diaries with pixel precision.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050d1a",
+  "theme_color": "#0ea5e9",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}

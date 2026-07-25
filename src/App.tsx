@@ -52,6 +52,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Analytics } from '@vercel/analytics/react';
+import { InstallManager } from './pwa/InstallManager';
 import { initAuth, googleSignIn, logout } from './firebase';
 import { uploadAndConvertPdf, exportToDocx } from './converter';
 import { generateCaseDiaryDocx, generateMultipleCaseDiariesDocx } from './exportDocx';
@@ -5842,6 +5843,7 @@ export default function App() {
         <p>DocuForge Case Diary Reconstruction Workspace • Powered securely by Google Cloud Platform & Gemini</p>
       </footer>
       <Analytics />
+      <InstallManager hasUser={!!user} />
     </div>
   );
 }

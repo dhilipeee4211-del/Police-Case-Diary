@@ -1,0 +1,301 @@
+/* PWA Install Experience Module Stylesheet */
+
+/* Hardware acceleration container */
+.pwa-gpu {
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+  will-change: transform, opacity, filter;
+}
+
+/* Glassmorphism utility variables */
+.pwa-glass {
+  background: var(--th-card-bg);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  border: 1px solid var(--th-card-border);
+  box-shadow: var(--th-card-shadow);
+}
+
+/* Floating Install App Button */
+.pwa-install-btn {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: 9999px;
+  font-family: var(--font-display), sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--th-text);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  text-decoration: none;
+  box-shadow: 0 8px 32px rgba(14, 165, 233, 0.15), var(--th-card-shadow);
+  
+  /* Animating gradient border fallback */
+  background: linear-gradient(var(--th-card-bg), var(--th-card-bg)) padding-box,
+              linear-gradient(135deg, #0ea5e9, #a855f7, #6366f1, #0ea5e9) border-box;
+  border: 2px solid transparent;
+  background-size: 200% 200%;
+  animation: pwa-gradient-border 6s ease infinite, pwa-float-slow 6s ease-in-out infinite;
+}
+
+/* Desktop & Tablet Position default (lg screen sizes and above) */
+@media (min-width: 1024px) {
+  .pwa-install-btn {
+    right: 24px;
+    bottom: 24px;
+  }
+}
+
+/* Mobile & Small Screen Position */
+@media (max-width: 1023px) {
+  .pwa-install-btn {
+    left: 50%;
+    transform: translate3d(-50%, 0, 0);
+  }
+  
+  .pwa-install-btn.no-mobile-nav {
+    bottom: 16px;
+  }
+  
+  .pwa-install-btn.has-mobile-nav {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+}
+
+/* Button Hover State */
+.pwa-install-btn:hover {
+  transform: scale(1.06);
+  box-shadow: 0 12px 40px rgba(14, 165, 233, 0.28), var(--th-card-shadow);
+  animation-play-state: paused, running; /* Pause float on hover but keep border animated */
+}
+
+@media (max-width: 1023px) {
+  .pwa-install-btn:hover {
+    transform: translate3d(-50%, -4px, 0) scale(1.04);
+  }
+}
+
+/* Button Active/Click State (Ripple-like shrink) */
+.pwa-install-btn:active {
+  transform: scale(0.96) !important;
+  box-shadow: 0 4px 16px rgba(14, 165, 233, 0.1), var(--th-card-shadow);
+}
+
+@media (max-width: 1023px) {
+  .pwa-install-btn:active {
+    transform: translate3d(-50%, 2px, 0) scale(0.96) !important;
+  }
+}
+
+/* Modal Backdrop */
+.pwa-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background-color: rgba(5, 13, 26, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Modal Container */
+.pwa-modal-content {
+  width: 100%;
+  max-width: 500px;
+  border-radius: 28px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4), var(--th-card-shadow);
+  transform: scale(0.95) translate3d(0, 20px, 0);
+  opacity: 0;
+  animation: pwa-modal-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Tablet sizing */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .pwa-modal-content {
+    max-width: 420px;
+  }
+}
+
+/* Mobile full-width margin */
+@media (max-width: 639px) {
+  .pwa-modal-content {
+    max-width: 100%;
+    margin-bottom: max(env(safe-area-inset-bottom), 16px);
+  }
+}
+
+/* Modal Animations */
+@keyframes pwa-modal-in {
+  to {
+    transform: scale(1) translate3d(0, 0, 0);
+    opacity: 1;
+  }
+}
+
+/* Floating Animations */
+@keyframes pwa-float-slow {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+/* Mobile Floating Animation */
+@keyframes pwa-float-mobile {
+  0%, 100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+  50% {
+    transform: translate3d(-50%, -6px, 0);
+  }
+}
+
+.pwa-install-btn.pos-mobile {
+  animation: pwa-gradient-border 6s ease infinite, pwa-float-mobile 6s ease-in-out infinite;
+}
+
+.pwa-install-btn.pos-mobile-nav {
+  animation: pwa-gradient-border 6s ease infinite, pwa-float-mobile 6s ease-in-out infinite;
+}
+
+/* Gradient Border Animation */
+@keyframes pwa-gradient-border {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Success Checkmark Drawing */
+.pwa-checkmark-svg {
+  width: 80px;
+  height: 80px;
+  display: block;
+  margin: 0 auto;
+}
+
+.pwa-checkmark-circle {
+  stroke-dasharray: 166;
+  stroke-dashoffset: 166;
+  stroke-width: 2;
+  stroke-miterlimit: 10;
+  stroke: #16a34a;
+  fill: none;
+  animation: pwa-stroke 0.6s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+}
+
+.pwa-checkmark-check {
+  transform-origin: 50% 50%;
+  stroke-dasharray: 48;
+  stroke-dashoffset: 48;
+  stroke-width: 3;
+  stroke: #16a34a;
+  fill: none;
+  animation: pwa-stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.6s forwards;
+}
+
+@keyframes pwa-stroke {
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Success Modal Container override */
+.pwa-success-content {
+  text-align: center;
+  max-width: 320px;
+  padding: 32px 24px;
+  background: var(--th-card-bg);
+  border-radius: 24px;
+  box-shadow: 0 20px 48px rgba(22, 163, 74, 0.15), var(--th-card-shadow);
+  border: 1px solid var(--th-success-border);
+}
+
+/* Confetti System */
+.pwa-confetti-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;
+}
+
+.pwa-confetti-particle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  opacity: 0;
+}
+
+/* 12 Confetti bursts in different directions */
+.pwa-confetti-particle:nth-child(1)  { background-color: #0ea5e9; animation: pwa-burst-1  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(2)  { background-color: #f59e0b; animation: pwa-burst-2  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(3)  { background-color: #10b981; animation: pwa-burst-3  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(4)  { background-color: #ec4899; animation: pwa-burst-4  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(5)  { background-color: #8b5cf6; animation: pwa-burst-5  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(6)  { background-color: #ef4444; animation: pwa-burst-6  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(7)  { background-color: #06b6d4; animation: pwa-burst-7  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(8)  { background-color: #14b8a6; animation: pwa-burst-8  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(9)  { background-color: #f59e0b; animation: pwa-burst-9  1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(10) { background-color: #10b981; animation: pwa-burst-10 1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(11) { background-color: #a855f7; animation: pwa-burst-11 1.5s ease-out forwards; }
+.pwa-confetti-particle:nth-child(12) { background-color: #f43f5e; animation: pwa-burst-12 1.5s ease-out forwards; }
+
+@keyframes pwa-burst-1  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(-80px, -60px) rotate(140deg); opacity: 0; } }
+@keyframes pwa-burst-2  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(60px, -110px) rotate(240deg); opacity: 0; } }
+@keyframes pwa-burst-3  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(-120px, 20px) rotate(90deg); opacity: 0; } }
+@keyframes pwa-burst-4  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(110px, 40px) rotate(-180deg); opacity: 0; } }
+@keyframes pwa-burst-5  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(-40px, 120px) rotate(320deg); opacity: 0; } }
+@keyframes pwa-burst-6  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(80px, 90px) rotate(-90deg); opacity: 0; } }
+@keyframes pwa-burst-7  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(-90px, -120px) rotate(45deg); opacity: 0; } }
+@keyframes pwa-burst-8  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(130px, -70px) rotate(120deg); opacity: 0; } }
+@keyframes pwa-burst-9  { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(-140px, -30px) rotate(-160deg); opacity: 0; } }
+@keyframes pwa-burst-10 { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(40px, -140px) rotate(210deg); opacity: 0; } }
+@keyframes pwa-burst-11 { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(-60px, 100px) rotate(-45deg); opacity: 0; } }
+@keyframes pwa-burst-12 { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(100px, 110px) rotate(150deg); opacity: 0; } }
+
+/* ACCESSIBILITY CONSTRAINTS */
+
+/* Focus Ring custom styling */
+.pwa-focus-ring:focus-visible {
+  outline: 3px solid var(--th-primary);
+  outline-offset: 2px;
+}
+
+/* Reduced Motion Settings */
+@media (prefers-reduced-motion: reduce) {
+  .pwa-install-btn {
+    animation: none !important;
+    transition: none !important;
+  }
+  .pwa-modal-content {
+    animation: pwa-fade-in 0.2s linear forwards !important;
+  }
+  .pwa-checkmark-circle, .pwa-checkmark-check {
+    animation: pwa-fade-in 0.2s linear forwards !important;
+    stroke-dashoffset: 0 !important;
+  }
+  .pwa-confetti-particle {
+    animation: none !important;
+    display: none !important;
+  }
+  @keyframes pwa-fade-in {
+    to { opacity: 1; }
+  }
+}
